@@ -24,6 +24,7 @@ const state = {
   gitRepo: "studio",
   exportSeen: new Set(),    // jobs de export ya descargados
   pollTimer: null,
+  lastOpened: null,         // {scope, rel|ref, pid?, name} del último workflow abierto desde el gestor
 };
 
 // ---------- i18n (EN por defecto + ES) ----------
@@ -179,6 +180,10 @@ Object.assign(I18N.en, {
   git_blocked_default: "You're using ComfyUI's own workflows folder — Git is disabled for safety. Set a dedicated workflows folder in Settings to enable versioning.",
   git_blocked_foreign: "This folder is inside ComfyUI's Git repository — Git is disabled to avoid conflicts. Set a dedicated workflows folder in Settings.",
   go_settings: "Open Settings",
+  btn_save_canvas: "Save canvas…", f_save_canvas: "Save current canvas", f_save_name: "Save as (name)",
+  f_overwrite: "Overwrite if it already exists",
+  st_no_canvas: "Couldn't read the ComfyUI canvas. Open this panel from the ComfyUI sidebar.",
+  st_saved_to: "Saved «{name}».",
 });
 Object.assign(I18N.es, {
   btn_from_comfy: "Desde ComfyUI…",
@@ -201,6 +206,10 @@ Object.assign(I18N.es, {
   git_blocked_default: "Estás usando la carpeta de workflows de ComfyUI — Git está desactivado por seguridad. Define una carpeta propia en Ajustes para activar el versionado.",
   git_blocked_foreign: "Esta carpeta está dentro del repositorio Git de ComfyUI — Git está desactivado para evitar conflictos. Define una carpeta de workflows propia en Ajustes.",
   go_settings: "Abrir Ajustes",
+  btn_save_canvas: "Guardar lienzo…", f_save_canvas: "Guardar el lienzo actual", f_save_name: "Guardar como (nombre)",
+  f_overwrite: "Sobrescribir si ya existe",
+  st_no_canvas: "No se pudo leer el lienzo de ComfyUI. Abre este panel desde la barra lateral de ComfyUI.",
+  st_saved_to: "Guardado «{name}».",
 });
 
 const HELP = {
@@ -684,10 +693,32 @@ function folderMenu(e, folder) {
 }
 
 function openGeneral(w) {
+  state.lastOpened = { scope: "general", rel: w.rel, name: w.name };
   openWorkflow({
     fetchUrl: `${API}/workflows/content?rel=${encodeURIComponent(w.rel)}`,
     name: w.name, storePath: storePathFor(w.rel, true), statusNode: $("#g-status"),
   });
+}
+
+// Guarda el lienzo actual de ComfyUI dentro de la carpeta del gestor (Guardar como).
+async function saveCanvasGeneral() {
+  const ser = window.parent && window.parent.bswmSerializeGraph;
+  const data = typeof ser === "function" ? ser() : null;
+  if (!data) { setStatus($("#g-status"), t("st_no_canvas"), "error"); return; }
+  const def = (state.lastOpened && state.lastOpened.scope === "general") ? state.lastOpened.name : "";
+  const folderOpts = state.general.folders.map((f) => ({ value: f, label: f === "" ? t("folder_root") : f }));
+  const v = await showForm(t("f_save_canvas"), [
+    { key: "name", label: t("f_save_name"), type: "text", value: def, placeholder: "workflow.json" },
+    { key: "folder", label: t("th_folder"), type: "select", value: state.genPath, options: folderOpts },
+    { key: "overwrite", label: t("f_overwrite"), type: "checkbox", value: false },
+  ], t("btn_save"));
+  if (!v || !v.name) return;
+  const rel = v.folder ? v.folder + "/" + v.name : v.name;
+  try {
+    const r = await postJSON(`${API}/workflows/import`, { name: rel, content: data, overwrite: v.overwrite });
+    setStatus($("#g-status"), t("st_saved_to", { name: r.rel }), "ok");
+    await loadGeneral();
+  } catch (e) { setStatus($("#g-status"), e.message, "error"); }
 }
 
 async function renameGeneral(w) {
@@ -1054,11 +1085,31 @@ function projItemMenu(e, p) {
 }
 
 function openProjectItem(p, i) {
+  state.lastOpened = { scope: "project", pid: p.id, ref: i.ref, name: i.name };
   const storePath = (state.isUserRoot && i.under_user_root && i.storage === "virtual") ? "workflows/" + i.ref : null;
   openWorkflow({
     fetchUrl: `${API}/projects/content?pid=${encodeURIComponent(p.id)}&ref=${encodeURIComponent(i.ref)}`,
     name: i.name, storePath, statusNode: $("#p-status"),
   });
+}
+
+// Guarda el lienzo actual de ComfyUI dentro del proyecto (en la subcarpeta actual).
+async function saveCanvasProject(p) {
+  const ser = window.parent && window.parent.bswmSerializeGraph;
+  const data = typeof ser === "function" ? ser() : null;
+  if (!data) { setStatus($("#p-status"), t("st_no_canvas"), "error"); return; }
+  const def = (state.lastOpened && state.lastOpened.scope === "project" && state.lastOpened.pid === p.id) ? state.lastOpened.name : "";
+  const v = await showForm(t("f_save_canvas"), [
+    { key: "name", label: t("f_save_name"), type: "text", value: def, placeholder: "workflow.json" },
+    { key: "subfolder", label: t("f_target_sub"), type: "text", value: state.projPath, placeholder: "(root)" },
+    { key: "overwrite", label: t("f_overwrite"), type: "checkbox", value: false },
+  ], t("btn_save"));
+  if (!v || !v.name) return;
+  try {
+    const r = await postJSON(`${API}/projects/save-canvas`, { pid: p.id, name: v.name, subfolder: v.subfolder, content: data, overwrite: v.overwrite });
+    setStatus($("#p-status"), t("st_saved_to", { name: r.ref }), "ok");
+    await refreshProjects();
+  } catch (e) { setStatus($("#p-status"), e.message, "error"); }
 }
 
 async function renameProjectItem(p, i) {
@@ -1427,6 +1478,7 @@ function wireEvents() {
   // General
   $("#g-refresh").addEventListener("click", loadGeneral);
   $("#g-filter").addEventListener("input", () => { state.genSel.clear(); state.genLast = { v: null }; renderGeneral(); });
+  $("#g-save").addEventListener("click", saveCanvasGeneral);
   $("#g-newfolder").addEventListener("click", () => newFolderIn(state.genPath));
   $("#g-import").addEventListener("click", () => importFiles("general"));
   $("#g-from-comfy").addEventListener("click", transferFromComfy);
@@ -1438,6 +1490,7 @@ function wireEvents() {
   $("#p-edit").addEventListener("click", () => { const p = currentProject(); if (p) projectForm(p); });
   $("#p-delete").addEventListener("click", () => { const p = currentProject(); if (p) deleteProject(p); });
   $("#p-active-btn").addEventListener("click", () => { const p = currentProject(); if (p) toggleActive(p); });
+  $("#p-save").addEventListener("click", () => { const p = currentProject(); if (p) saveCanvasProject(p); });
   $("#p-add-sub").addEventListener("click", () => { const p = currentProject(); if (p) addSubfolderIn(p, state.projPath); });
   $("#p-export").addEventListener("click", async () => {
     const p = currentProject(); if (!p) return;

@@ -544,6 +544,25 @@ def project_delete_file(pid, ref):
     return True
 
 
+def save_canvas(pid, name, content, subfolder="", overwrite=False):
+    """Guarda el grafo actual (content) en la carpeta física del proyecto.
+
+    En proyectos virtuales escribe en la raíz general y crea/actualiza el vínculo; en proyectos con
+    carpeta, escribe dentro de su carpeta. Devuelve {ref}.
+    """
+    from .util import ensure_json_ext
+    db = load_db()
+    p = _get(db, pid)
+    name = ensure_json_ext(name)
+    sub = normalize_rel(subfolder)
+    rel = f"{sub}/{name}" if sub else name
+    root = _phys_root(p)
+    new_rel = workflows.write(rel, content, overwrite=overwrite, root=root)
+    if p.get("storage") != "folder":
+        link_workflow(pid, new_rel, subfolder=sub, allow_multi=True)
+    return {"ref": new_rel}
+
+
 def add_current_to_project(pid, rel, subfolder="", alias="", allow_multi=False):
     """Atajo: vincular un workflow (de la raíz general) a un proyecto, o copiarlo si es de carpeta."""
     db = load_db()

@@ -21,32 +21,44 @@ const APP_URL = "/bs_workflow_manager/";
 window.bswmOpenWorkflow = async function (payload) {
   payload = payload || {};
   try {
-    // 1) Apertura nativa rastreada (si el workflow lo conoce ComfyUI: vive en user/<u>/workflows).
-    if (payload.storePath) {
-      try {
-        const store = app.extensionManager && app.extensionManager.workflow;
-        if (store && typeof store.openWorkflow === "function" &&
-            typeof store.getWorkflowByPath === "function") {
-          const wf = store.getWorkflowByPath(payload.storePath);
-          if (wf) {
-            await store.openWorkflow(wf);
-            return { ok: true, tracked: true };
-          }
-        }
-      } catch (e) {
-        console.warn("[BS Workflow Manager] apertura nativa falló, uso loadGraphData:", e);
-      }
-    }
-    // 2) Fallback universal: cargar el JSON directamente en el canvas.
+    // Siempre leemos el contenido real del workflow desde nuestro backend.
     const res = await fetch(payload.fetchUrl);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
-    await app.loadGraphData(data, true, true, payload.name || null);
-    return { ok: true, tracked: false };
+
+    // Si el workflow lo conoce ComfyUI (vive en user/<u>/workflows), recuperamos su objeto para
+    // que la pestaña quede ASOCIADA a él y "Guardar" escriba en el archivo correcto.
+    let wf = null;
+    if (payload.storePath) {
+      try {
+        const store = app.extensionManager && app.extensionManager.workflow;
+        if (store && typeof store.getWorkflowByPath === "function") {
+          wf = store.getWorkflowByPath(payload.storePath) || null;
+        }
+      } catch (e) { /* sin store: cargamos sin asociar */ }
+    }
+
+    // Cargamos SIEMPRE el JSON descargado. (No usamos store.openWorkflow porque abre la pestaña
+    // pero no vuelca el grafo en el lienzo -> antes parecía "duplicar" el workflow abierto.)
+    await app.loadGraphData(data, true, true, wf || payload.name || null);
+    return { ok: true, tracked: !!wf };
   } catch (e) {
     console.error("[BS Workflow Manager] open workflow:", e);
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
+};
+
+// ---------- Puente: serializar el lienzo actual (para "Guardar en el gestor") ----------
+window.bswmSerializeGraph = function () {
+  try {
+    const g = app.graph;
+    if (!g) return null;
+    if (typeof g.serialize === "function") return g.serialize();
+    if (typeof g.asSerialisable === "function") return g.asSerialisable();
+  } catch (e) {
+    console.error("[BS Workflow Manager] serialize graph:", e);
+  }
+  return null;
 };
 
 // ---------- Puente: workflow activo ----------

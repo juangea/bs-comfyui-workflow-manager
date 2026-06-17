@@ -438,6 +438,24 @@ async def api_projects_add_current(request):
         return _err(exc, 400)
 
 
+@routes.post(PREFIX + "/api/projects/save-canvas")
+async def api_projects_save_canvas(request):
+    data = await _body(request)
+    content = data.get("content")
+    if content is None or not data.get("name"):
+        return _err("Faltan 'name' o 'content'.", 400)
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    try:
+        res = projects.save_canvas(
+            data.get("pid"), data.get("name"), content,
+            subfolder=data.get("subfolder", ""), overwrite=bool(data.get("overwrite")),
+        )
+        return web.json_response({"ok": True, **res})
+    except ValueError as exc:
+        return _err(exc, 400)
+
+
 @routes.get(PREFIX + "/api/projects/content")
 async def api_projects_content(request):
     pid = request.rel_url.query.get("pid", "")

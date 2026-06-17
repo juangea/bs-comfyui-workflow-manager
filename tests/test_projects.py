@@ -104,6 +104,30 @@ def test_export_import_db():
     assert len(projects.resolve()["projects"]) == 1
 
 
+def test_save_canvas_virtual_and_folder():
+    base = fresh_env()
+    from bswm import projects
+    content = json.dumps({"nodes": [{"id": 1}]})
+    # virtual: escribe en la raíz general y crea vínculo
+    pv = projects.create_project("pepe", storage="virtual")
+    res = projects.save_canvas(pv["id"], "from_canvas", content, subfolder="imagen")
+    assert res["ref"] == "imagen/from_canvas.json"
+    pr = [p for p in projects.resolve()["projects"] if p["id"] == pv["id"]][0]
+    assert pr["count"] == 1 and pr["items"][0]["subfolder"] == "imagen"
+    # folder: escribe dentro de la carpeta del proyecto
+    folder = os.path.join(base, "proj_folder")
+    pf = projects.create_project("render", storage="folder", folder=folder)
+    projects.save_canvas(pf["id"], "shot.json", content, subfolder="v01")
+    assert os.path.isfile(os.path.join(folder, "v01", "shot.json"))
+    # sin overwrite, repetir falla
+    try:
+        projects.save_canvas(pf["id"], "shot.json", content, subfolder="v01")
+        raise AssertionError("debería fallar sin overwrite")
+    except ValueError:
+        pass
+    projects.save_canvas(pf["id"], "shot.json", content, subfolder="v01", overwrite=True)  # ok
+
+
 def test_dedicated_requires_folder():
     fresh_env()
     from bswm import projects
