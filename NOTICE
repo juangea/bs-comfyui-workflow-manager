@@ -1,0 +1,37 @@
+BS ComfyUI Workflow Manager
+Copyright (C) 2026 Enob-Studio S.L. and Juan Gea
+
+This program is free software: it is licensed under the GNU General Public License,
+version 3.0 (GPL-3.0-only). See the LICENSE file for the full text.
+
+------------------------------------------------------------------------------
+Relicensing
+------------------------------------------------------------------------------
+As the sole copyright holders, Enob-Studio S.L. and Juan Gea reserve the right to
+release this code under different terms (for example Apache-2.0 or MIT) in the future.
+The GPL applies to recipients, not to the copyright holders.
+
+------------------------------------------------------------------------------
+Trademarks / brand (NOT covered by the GPL)
+------------------------------------------------------------------------------
+"Bone-Studio" (the public brand) and the "BS-WM" logo/mark are trademarks of
+Enob-Studio S.L., all rights reserved. They are NOT licensed under the GPL and may not
+be used to represent, brand or endorse derived or third-party works without written
+permission from Enob-Studio S.L.
+
+------------------------------------------------------------------------------
+Third-party fonts
+------------------------------------------------------------------------------
+The font files under webapp/fonts/ (Jost, Hanken Grotesk, IBM Plex Mono) are third-party
+works, not created by Enob-Studio S.L., redistributed unmodified under the SIL Open Font
+License, Version 1.1. See webapp/fonts/OFL.txt for the license text and attributions.
+
+------------------------------------------------------------------------------
+DISCLAIMER OF WARRANTY AND LIABILITY
+------------------------------------------------------------------------------
+This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND. It reads, writes, moves,
+duplicates and deletes workflow files on the user's machine at the user's request, and can
+run Git operations (commit, push, pull, restore). To the maximum extent permitted by
+applicable law, Enob-Studio S.L. and Juan Gea shall NOT be liable for any damage or data
+loss. You use this software entirely at your own risk. See also sections 15 and 16 of the
+GPLv3 (LICENSE).

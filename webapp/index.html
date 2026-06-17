@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bone-Studio Workflow Manager</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="https://bone-studio.com" target="_blank" rel="noopener noreferrer"
+       data-i18n-title="brand_link_title" title="Go to bone-studio.com">
+      <svg class="brand-logo" viewBox="0 0 256 256" role="img" aria-label="Bone-Studio Workflow Manager">
+        <circle cx="128" cy="128" r="124" fill="#AC1F23" />
+        <text x="128" y="150" text-anchor="middle"
+              font-family="Jost, 'Century Gothic', 'Arial Rounded MT Bold', Arial, sans-serif"
+              font-weight="700" font-size="62" letter-spacing="-1" fill="#FAF0DC">BS-WM</text>
+      </svg>
+      <div class="brand-words">
+        <div class="brand-name">Bone-Studio</div>
+        <div class="brand-app">Workflow Manager</div>
+      </div>
+    </a>
+    <nav class="tabs">
+      <button class="tab active" data-view="general" data-i18n="tab_general">General</button>
+      <button class="tab" data-view="projects" data-i18n="tab_projects">Projects</button>
+      <button class="tab" data-view="git" data-i18n="tab_git">Git</button>
+      <button class="tab" data-view="settings" data-i18n="tab_settings">Settings</button>
+    </nav>
+    <div class="header-right">
+      <button id="help-btn" class="help-btn" aria-label="Help" data-i18n-title="help_tooltip" title="Help / Ayuda">?</button>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button class="lang-btn" data-lang="en">EN</button>
+        <button class="lang-btn" data-lang="es">ES</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ VIEW: GENERAL ============ -->
+  <section id="view-general" class="view active">
+    <div class="panel">
+      <div class="row toolbar">
+        <button id="g-refresh" class="btn small" data-i18n="btn_refresh">Refresh</button>
+        <input id="g-filter" type="text" class="filter" data-i18n-ph="ph_filter_wf"
+               placeholder="Search: multiple terms (e.g. wan video)" />
+        <span class="spacer"></span>
+        <button id="g-newfolder" class="btn small" data-i18n="btn_new_folder">New folder</button>
+        <button id="g-import" class="btn small" data-i18n="btn_import">Import…</button>
+        <button id="g-from-comfy" class="btn small" data-i18n="btn_from_comfy">From ComfyUI…</button>
+      </div>
+      <div id="g-crumbs" class="crumbs"></div>
+      <div id="g-status" class="status"></div>
+      <div class="table-wrap" id="g-browser-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="c-file" data-i18n="th_workflow">Workflow</th>
+              <th class="c-size" data-i18n="th_size">Size</th>
+            </tr>
+          </thead>
+          <tbody id="g-body"></tbody>
+        </table>
+      </div>
+      <div class="row footer">
+        <span id="g-summary" class="muted"></span>
+        <span class="spacer"></span>
+        <span id="g-selinfo" class="muted"></span>
+        <button id="g-export-sel" class="btn small" data-i18n="btn_export_sel">Export selected</button>
+      </div>
+      <div class="hint" data-i18n="hint_select">Click to select · Ctrl/⌘-click multi · Shift-click range · double-click to open · right-click for actions</div>
+    </div>
+
+    <div class="panel" id="g-exports-panel">
+      <div class="row"><h3 data-i18n="h_exports">Exports</h3><span class="spacer"></span>
+        <button class="btn small export-clear" data-i18n="btn_clear_finished">Clear finished</button></div>
+      <div class="export-jobs" data-jobs="export"></div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW: PROJECTS ============ -->
+  <section id="view-projects" class="view">
+    <div class="split">
+      <aside class="split-side">
+        <div class="panel">
+          <div class="row toolbar">
+            <h3 data-i18n="h_projects">Projects</h3>
+            <span class="spacer"></span>
+            <button id="p-new" class="btn small primary" data-i18n="btn_new_project">New</button>
+          </div>
+          <div id="p-list" class="proj-list"></div>
+        </div>
+      </aside>
+      <div class="split-main">
+        <div class="panel" id="p-detail">
+          <div id="p-empty" class="empty-state">
+            <svg viewBox="0 0 24 24" class="empty-ico" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+            <div class="empty-title" data-i18n="p_empty_title">No project selected</div>
+            <div class="muted" data-i18n="p_empty">Create a project to group your production workflows, or pick one on the left.</div>
+            <button id="p-empty-new" class="btn primary" data-i18n="f_new_project">New project</button>
+          </div>
+          <div id="p-content" class="hidden">
+            <div class="row toolbar">
+              <span class="dot" id="p-dot"></span>
+              <h3 id="p-title" style="margin:0"></h3>
+              <span id="p-storage-badge"></span>
+              <span class="spacer"></span>
+              <button id="p-active-btn" class="btn small" data-i18n="btn_set_active">Set active</button>
+              <button id="p-edit" class="btn small" data-i18n="btn_edit">Edit</button>
+              <button id="p-export" class="btn small" data-i18n="btn_export_project">Export</button>
+              <button id="p-delete" class="btn small danger" data-i18n="btn_delete">Delete</button>
+            </div>
+            <p id="p-notes" class="muted" style="margin:6px 0 0"></p>
+            <div class="row toolbar" style="margin-top:10px">
+              <div id="p-crumbs" class="crumbs"></div>
+              <span class="spacer"></span>
+              <button id="p-add-sub" class="btn small ghost" data-i18n="btn_add_sub">+ subfolder</button>
+            </div>
+            <div class="row toolbar" style="margin-top:8px">
+              <input id="p-filter" type="text" class="filter" data-i18n-ph="ph_filter_wf"
+                     placeholder="Search: multiple terms" />
+              <span class="spacer"></span>
+              <span id="p-selinfo" class="muted"></span>
+              <button id="p-export-sel" class="btn small" data-i18n="btn_export_sel">Export selected</button>
+            </div>
+            <div id="p-status" class="status"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="c-file" data-i18n="th_workflow">Workflow</th>
+                    <th data-i18n="th_subfolder">Subfolder</th>
+                    <th class="c-size" data-i18n="th_size">Size</th>
+                  </tr>
+                </thead>
+                <tbody id="p-body"></tbody>
+              </table>
+            </div>
+            <div class="hint" data-i18n="hint_select">Click to select · Ctrl/⌘-click multi · Shift-click range · double-click to open · right-click for actions</div>
+            <span id="p-summary" class="muted"></span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="row"><h3 data-i18n="h_exports">Exports</h3><span class="spacer"></span>
+            <button class="btn small export-clear" data-i18n="btn_clear_finished">Clear finished</button></div>
+          <div class="export-jobs" data-jobs="export"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW: GIT ============ -->
+  <section id="view-git" class="view">
+    <div class="panel">
+      <div id="git-banner" class="git-banner"></div>
+      <div class="row toolbar">
+        <label class="field inline">
+          <span data-i18n="lbl_repo_target">Repository</span>
+          <select id="git-repo"></select>
+        </label>
+        <button id="git-refresh" class="btn small" data-i18n="btn_refresh">Refresh</button>
+        <span class="spacer"></span>
+        <div id="git-info" class="kv"></div>
+      </div>
+      <div id="git-status" class="status"></div>
+    </div>
+
+    <div id="git-actions-panel" class="panel">
+      <div class="row toolbar">
+        <button id="git-init" class="btn small" data-i18n="btn_git_init">Init repo</button>
+        <span class="spacer"></span>
+        <button id="git-pull" class="btn small" data-i18n="btn_git_pull">Pull</button>
+        <button id="git-push" class="btn small" data-i18n="btn_git_push">Push</button>
+      </div>
+      <div class="row toolbar" style="margin-top:10px">
+        <input id="git-commit-msg" type="text" class="filter" style="flex:1"
+               data-i18n-ph="ph_commit" placeholder="Commit message" />
+        <button id="git-commit" class="btn small primary" data-i18n="btn_git_commit">Commit all changes</button>
+      </div>
+      <div class="row toolbar" style="margin-top:10px">
+        <input id="git-remote-url" type="text" class="filter" style="flex:1"
+               data-i18n-ph="ph_remote" placeholder="Remote URL (https://… or git@…)" />
+        <button id="git-remote" class="btn small" data-i18n="btn_git_remote">Set remote</button>
+        <button id="git-gh" class="btn small" data-i18n="btn_git_gh">Create on GitHub</button>
+      </div>
+      <div style="margin-top:12px">
+        <div class="row"><h3 data-i18n="h_changes">Pending changes</h3><span id="git-changes-sum" class="muted"></span></div>
+        <div id="git-changes" class="changes"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row"><h3 data-i18n="h_history">History</h3></div>
+      <div id="git-log" class="changes"></div>
+    </div>
+
+    <div class="panel">
+      <div class="row"><h3 data-i18n="h_git_jobs">Git operations</h3><span class="spacer"></span>
+        <button id="git-clear" class="btn small" data-i18n="btn_clear_finished">Clear finished</button></div>
+      <div id="git-jobs"></div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW: SETTINGS ============ -->
+  <section id="view-settings" class="view">
+    <div class="panel">
+      <div class="row"><h3 data-i18n="h_root">Workflows root</h3></div>
+      <p class="muted" data-i18n="root_desc">Folder the General view manages. Leave empty to use ComfyUI's own workflows folder (recommended: native open works).</p>
+      <div class="row toolbar" style="margin-top:8px">
+        <input id="s-root" type="text" class="filter" style="flex:1" data-i18n-ph="ph_root" placeholder="(ComfyUI default)" />
+        <button id="s-root-save" class="btn small primary" data-i18n="btn_save">Save</button>
+        <button id="s-root-reset" class="btn small" data-i18n="btn_reset_default">Reset to default</button>
+      </div>
+      <div id="s-root-status" class="status"></div>
+    </div>
+
+    <div class="panel">
+      <div class="row"><h3 data-i18n="h_db">Projects database</h3></div>
+      <p class="muted" data-i18n="db_desc">A single exportable JSON file. Export it for backup or to share project structure; import to restore or merge.</p>
+      <div class="kv" style="margin:6px 0"><span data-i18n="lbl_db_path">Path:</span><b id="s-db-path"></b></div>
+      <div class="row toolbar">
+        <button id="s-db-export" class="btn small" data-i18n="btn_db_export">Export DB</button>
+        <button id="s-db-import" class="btn small" data-i18n="btn_db_import">Import DB…</button>
+        <label class="field inline"><input id="s-db-merge" type="checkbox" /><span data-i18n="lbl_merge">merge</span></label>
+      </div>
+      <div id="s-db-status" class="status"></div>
+    </div>
+  </section>
+
+  <!-- Help / documentation -->
+  <div id="help-modal" class="modal hidden">
+    <div class="modal-card help-card">
+      <div class="help-head">
+        <div id="help-title" class="modal-title"></div>
+        <button id="help-close" class="btn small" aria-label="Close">✕</button>
+      </div>
+      <div id="help-body" class="help-body"></div>
+    </div>
+  </div>
+
+  <!-- Generic modal dialog -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div id="modal-title" class="modal-title"></div>
+      <div id="modal-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn" data-i18n="btn_cancel">Cancel</button>
+        <button id="modal-ok" class="btn primary" data-i18n="btn_accept">Accept</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file input for imports -->
+  <input id="file-input" type="file" accept=".json" style="display:none" multiple />
+
+  <script src="app.js"></script>
+</body>
+</html>

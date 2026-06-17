@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Exports / temporales
+*.part
+*.tmp
+*.zip
+
+# Entornos
+.venv/
+venv/
+env/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs locales
+*.log

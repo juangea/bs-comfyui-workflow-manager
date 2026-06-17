@@ -1,0 +1,28 @@
+[project]
+name = "bs-comfyui-workflow-manager"
+version = "1.0.0"
+description = "Organize your ComfyUI workflows for production: a folder manager plus a project layer (exportable internal DB), bulk export and optional Git versioning — all from a built-in panel."
+authors = [
+    { name = "Enob-Studio S.L." },
+    { name = "Juan Gea", email = "juangea@bone-studio.com" },
+]
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+readme = "README.md"
+# No external dependencies: Python stdlib only. aiohttp/PromptServer are provided by ComfyUI.
+# Git/GitHub features shell out to the system `git` / `gh` if present (never installed by us).
+dependencies = []
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/juangea/bs-comfyui-workflow-manager"
+
+# Metadata for the ComfyUI Registry (comfy-cli). Does not affect runtime.
+[tool.comfy]
+PublisherId = "bonestudio"
+DisplayName = "Bone-Studio Workflow Manager"
+Icon = ""

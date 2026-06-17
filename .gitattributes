@@ -1,0 +1,7 @@
+# Normaliza saltos de línea: texto en LF, binarios intactos.
+* text=auto eol=lf
+
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.ico binary

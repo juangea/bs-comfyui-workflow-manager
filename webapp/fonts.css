@@ -1,0 +1,36 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Copyright (C) 2026 Enob-Studio S.L. and Juan Gea */
+/* Fuentes Bone Studio auto-alojadas (subconjunto latino, sin red).
+   Tomadas de BS_Prompter: Jost (display) · Hanken Grotesk (cuerpo) · IBM Plex Mono (meta). */
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 400 700;          /* variable */
+  font-display: swap;
+  src: url("fonts/hanken-grotesk-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Jost";
+  font-style: normal;
+  font-weight: 400 700;          /* variable */
+  font-display: swap;
+  src: url("fonts/jost-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+}
