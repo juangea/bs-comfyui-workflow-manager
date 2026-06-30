@@ -317,6 +317,21 @@ input[type="checkbox"] { accent-color: var(--red-500); width: 15px; height: 15px
 
 .empty { padding: 22px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
 
+/* ---------- Campo de ruta (input + Examinar) ---------- */
+.path-row { display: flex; gap: 6px; align-items: center; }
+.path-row input { flex: 1; }
+
+/* ---------- Explorador de carpetas del servidor ---------- */
+.fb-card { width: min(560px, 94vw); display: flex; flex-direction: column; }
+.fb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fb-head .fb-path { flex: 1; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
+.fb-list { max-height: 50vh; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin-bottom: 8px; }
+.fb-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; font-size: 12.5px; }
+.fb-row:hover { background: rgba(250, 240, 220, 0.05); }
+.fb-row .ico { color: var(--amber-400); }
+.fb-row .fb-name { flex: 1; }
+.fb-newrow { display: flex; gap: 6px; align-items: center; margin-bottom: 12px; }
+
 /* ---------- Estado vacío cuidado ---------- */
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px 20px; text-align: center; }
 .empty-state .empty-ico { width: 46px; height: 46px; color: var(--ink-600); }

@@ -184,6 +184,16 @@ Object.assign(I18N.en, {
   f_overwrite: "Overwrite if it already exists",
   st_no_canvas: "Couldn't read the ComfyUI canvas. Open this panel from the ComfyUI sidebar.",
   st_saved_to: "Saved «{name}».",
+  // explorador de carpetas del servidor
+  btn_browse: "Browse…", fb_title: "Choose a folder on the ComfyUI server",
+  fb_roots: "Server roots", fb_new_folder: "New folder here", fb_select: "Select this folder",
+  fb_up: "Up", fb_empty: "(no subfolders)", fb_new_name: "New folder name",
+  lbl_server_path: "Path on the ComfyUI server",
+  // subcarpetas (picker)
+  sub_root: "(root)", sub_new: "＋ New subfolder…", f_new_sub_under: "New subfolder (under {where})",
+  // guardar en proyecto
+  btn_save_into: "Save to project", btn_save_into_general: "Save to folder", btn_save_as: "Save as…",
+  st_save_native_hint: "Tip: ComfyUI's own Save (Ctrl+S) writes to ComfyUI's folder. Use this button to save into the manager.",
 });
 Object.assign(I18N.es, {
   btn_from_comfy: "Desde ComfyUI…",
@@ -210,6 +220,16 @@ Object.assign(I18N.es, {
   f_overwrite: "Sobrescribir si ya existe",
   st_no_canvas: "No se pudo leer el lienzo de ComfyUI. Abre este panel desde la barra lateral de ComfyUI.",
   st_saved_to: "Guardado «{name}».",
+  // explorador de carpetas del servidor
+  btn_browse: "Examinar…", fb_title: "Elige una carpeta en el servidor de ComfyUI",
+  fb_roots: "Raíces del servidor", fb_new_folder: "Nueva carpeta aquí", fb_select: "Seleccionar esta carpeta",
+  fb_up: "Subir", fb_empty: "(sin subcarpetas)", fb_new_name: "Nombre de la carpeta nueva",
+  lbl_server_path: "Ruta en el servidor de ComfyUI",
+  // subcarpetas (picker)
+  sub_root: "(raíz)", sub_new: "＋ Nueva subcarpeta…", f_new_sub_under: "Nueva subcarpeta (dentro de {where})",
+  // guardar en proyecto
+  btn_save_into: "Guardar en proyecto", btn_save_into_general: "Guardar en carpeta", btn_save_as: "Guardar como…",
+  st_save_native_hint: "Nota: el Guardar propio de ComfyUI (Ctrl+S) escribe en la carpeta de ComfyUI. Usa este botón para guardar en el gestor.",
 });
 
 const HELP = {
@@ -380,9 +400,26 @@ function showForm(title, fields, okLabel) {
         const rec = inputs[f.key];
         if (!rec) continue;
         v[f.key] = rec.type === "checkbox" ? rec.input.checked
-          : (rec.type === "text" || rec.type === "textarea" ? rec.input.value.trim() : rec.input.value);
+          : (rec.type === "text" || rec.type === "textarea" || rec.type === "path" ? rec.input.value.trim() : rec.input.value);
       }
       return v;
+    };
+    const optionEls = (opts, selected) => (opts || []).map((o) =>
+      el("option", { value: o.value, ...(o.value === selected ? { selected: "selected" } : {}) }, o.label));
+    const resolveOptions = (f, vals) => (typeof f.options === "function" ? f.options(vals) : (f.options || []));
+    // Selects con opciones dinámicas (función): se repueblan al cambiar otro campo.
+    const rebuildDynamic = () => {
+      const vals = readValues();
+      for (const f of fields) {
+        if (f.type === "select" && typeof f.options === "function") {
+          const rec = inputs[f.key];
+          const opts = resolveOptions(f, vals);
+          const keep = rec.input.value;
+          const sel = opts.some((o) => o.value === keep) ? keep : (opts[0] && opts[0].value);
+          rec.input.innerHTML = "";
+          optionEls(opts, sel).forEach((o) => rec.input.appendChild(o));
+        }
+      }
     };
     const refreshVisibility = () => {
       for (const f of fields) {
@@ -391,12 +428,14 @@ function showForm(title, fields, okLabel) {
       }
     };
 
+    const initVals = {};
+    for (const f of fields) if (f.value !== undefined) initVals[f.key] = f.value;
+
     for (const f of fields) {
       if (f.type === "html") { grid.appendChild(el("div", { html: f.html, class: f.cls || "" })); continue; }
       let input;
       if (f.type === "select") {
-        input = el("select", {}, ...(f.options || []).map((o) =>
-          el("option", { value: o.value, ...(o.value === f.value ? { selected: "selected" } : {}) }, o.label)));
+        input = el("select", {}, ...optionEls(resolveOptions(f, initVals), f.value));
       } else if (f.type === "textarea") {
         input = el("textarea", { placeholder: f.placeholder || "" }); input.value = f.value || "";
       } else if (f.type === "checkbox") {
@@ -406,15 +445,26 @@ function showForm(title, fields, okLabel) {
       } else {
         input = el("input", { type: "text", placeholder: f.placeholder || "", value: f.value || "" });
       }
-      const wrap = f.type === "checkbox"
-        ? el("label", { class: "field inline" }, input, el("span", {}, f.label || f.key))
-        : el("label", { class: "field" }, el("span", {}, f.label || f.key), input);
+      let wrap;
+      if (f.type === "checkbox") {
+        wrap = el("label", { class: "field inline" }, input, el("span", {}, f.label || f.key));
+      } else if (f.type === "path") {
+        const browse = el("button", { class: "btn small", type: "button", onclick: async () => {
+          const picked = await browseServerFolder(input.value.trim());
+          if (picked != null) { input.value = picked; refreshVisibility(); }
+        } }, t("btn_browse"));
+        wrap = el("label", { class: "field" }, el("span", {}, f.label || f.key),
+          el("div", { class: "path-row" }, input, browse));
+      } else {
+        wrap = el("label", { class: "field" }, el("span", {}, f.label || f.key), input);
+      }
       inputs[f.key] = { input, type: f.type, wrap };
-      input.addEventListener("change", () => { refreshVisibility(); if (f.onchange) f.onchange(readValues(), inputs); });
+      input.addEventListener("change", () => { rebuildDynamic(); refreshVisibility(); if (f.onchange) f.onchange(readValues(), inputs); });
       input.addEventListener("input", refreshVisibility);
       grid.appendChild(wrap);
     }
     body.appendChild(grid);
+    rebuildDynamic();
     refreshVisibility();
 
     const ok = $("#modal-ok"), cancel = $("#modal-cancel");
@@ -439,6 +489,67 @@ function openHelp() {
   $("#help-modal").classList.remove("hidden");
 }
 function closeHelp() { $("#help-modal").classList.add("hidden"); }
+
+// ---------- explorador de carpetas del SERVIDOR ----------
+// Devuelve una promesa con la ruta absoluta del servidor elegida, o null si se cancela.
+function browseServerFolder(startPath) {
+  return new Promise((resolve) => {
+    const overlay = el("div", { class: "modal" });
+    const card = el("div", { class: "modal-card fb-card" });
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    let cur = startPath || "";
+    const close = (val) => { overlay.remove(); resolve(val); };
+
+    const render = async () => {
+      card.innerHTML = "";
+      card.appendChild(el("div", { class: "modal-title" }, t("fb_title")));
+      let data;
+      try {
+        data = await getJSON(`${API}/fs/list?path=${encodeURIComponent(cur)}`);
+      } catch (e) {
+        cur = "";
+        try { data = await getJSON(`${API}/fs/list?path=`); }
+        catch (e2) { card.appendChild(el("div", { class: "status error" }, e2.message)); return; }
+      }
+
+      const head = el("div", { class: "fb-head" },
+        el("span", { class: "fb-path" }, data.is_root_list ? t("fb_roots") : data.path));
+      if (!data.is_root_list) {
+        head.appendChild(el("button", { class: "btn small", onclick: () => { cur = data.parent || ""; render(); } }, "↑ " + t("fb_up")));
+      }
+      card.appendChild(head);
+
+      const list = el("div", { class: "fb-list" });
+      if (!data.dirs.length) list.appendChild(el("div", { class: "muted", style: "padding:8px" }, t("fb_empty")));
+      for (const d of data.dirs) {
+        list.appendChild(el("div", { class: "fb-row", ondblclick: () => { cur = d.path; render(); } },
+          el("span", { class: "ico" }, "📁"),
+          el("span", { class: "fb-name", onclick: () => { cur = d.path; render(); } }, d.name)));
+      }
+      card.appendChild(list);
+
+      if (!data.is_root_list) {
+        const newInput = el("input", { type: "text", placeholder: t("fb_new_name"), style: "flex:1" });
+        const newBtn = el("button", { class: "btn small", onclick: async () => {
+          const name = newInput.value.trim(); if (!name) return;
+          try { await postJSON(`${API}/fs/mkdir`, { path: data.path, name }); newInput.value = ""; render(); }
+          catch (e) { alert(e.message); }
+        } }, t("fb_new_folder"));
+        card.appendChild(el("div", { class: "fb-newrow" }, newInput, newBtn));
+      }
+
+      const actions = el("div", { class: "modal-actions" },
+        el("button", { class: "btn", onclick: () => close(null) }, t("btn_cancel")));
+      const selBtn = el("button", { class: "btn primary", onclick: () => close(data.path || null) }, t("fb_select"));
+      if (data.is_root_list) selBtn.disabled = true;
+      actions.appendChild(selBtn);
+      card.appendChild(actions);
+    };
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(null); });
+    render();
+  });
+}
 
 // ---------- menú contextual ----------
 function closeContextMenu() {
@@ -700,6 +811,23 @@ function openGeneral(w) {
   });
 }
 
+// Guardado rápido (vista General): sobrescribe el workflow abierto desde el gestor; si no hay, "Guardar como".
+async function saveIntoGeneral() {
+  const lo = state.lastOpened;
+  if (lo && lo.scope === "general" && lo.rel) {
+    const ser = window.parent && window.parent.bswmSerializeGraph;
+    const data = typeof ser === "function" ? ser() : null;
+    if (!data) { setStatus($("#g-status"), t("st_no_canvas"), "error"); return; }
+    try {
+      const r = await postJSON(`${API}/workflows/import`, { name: lo.rel, content: data, overwrite: true });
+      setStatus($("#g-status"), t("st_saved_to", { name: r.rel }), "ok");
+      await loadGeneral();
+    } catch (e) { setStatus($("#g-status"), e.message, "error"); }
+    return;
+  }
+  return saveCanvasGeneral();
+}
+
 // Guarda el lienzo actual de ComfyUI dentro de la carpeta del gestor (Guardar como).
 async function saveCanvasGeneral() {
   const ser = window.parent && window.parent.bswmSerializeGraph;
@@ -844,6 +972,24 @@ async function transferFromComfy() {
   ok.addEventListener("click", onOk); cancel.addEventListener("click", onCancel);
 }
 
+// Opciones de subcarpeta de un proyecto para un <select>: (raíz) + existentes + "＋ nueva…".
+function subfolderOptions(p) {
+  const opts = [{ value: "", label: t("sub_root") }];
+  if (p) for (const s of p.subfolders) opts.push({ value: s, label: s });
+  opts.push({ value: "__new__", label: t("sub_new") });
+  return opts;
+}
+// Campo "subfolder" (select dependiente de `pidKey`) + campo "new_sub" (texto, visible si __new__).
+function subfolderFields(pidKey, initialSub) {
+  return [
+    { key: "subfolder", label: t("f_target_sub"), type: "select", value: initialSub || "",
+      options: (vals) => subfolderOptions(state.projects.find((p) => p.id === vals[pidKey])) },
+    { key: "new_sub", label: t("f_sub_name"), type: "text", value: "", placeholder: "imagen/v01",
+      show: (vals) => vals.subfolder === "__new__" },
+  ];
+}
+function resolveSub(v) { return v.subfolder === "__new__" ? (v.new_sub || "") : v.subfolder; }
+
 // ---------- añadir a proyecto (desde general) ----------
 async function addToProject(refs) {
   refs = Array.isArray(refs) ? refs : [refs];
@@ -856,14 +1002,15 @@ async function addToProject(refs) {
   const target = state.activeProject || state.projects[0].id;
   const v = await showForm(t("f_addproj_title"), [
     { key: "pid", label: t("f_target_project"), type: "select", value: target, options: projOpts },
-    { key: "subfolder", label: t("f_target_sub"), type: "text", value: "", placeholder: "(root)" },
+    ...subfolderFields("pid", ""),
     { key: "allow_multi", label: t("f_allow_multi"), type: "checkbox", value: false },
   ], t("btn_confirm"));
   if (!v) return;
+  const subfolder = resolveSub(v);
   const errs = [];
   for (const rel of refs) {
     try {
-      await postJSON(`${API}/projects/add-current`, { pid: v.pid, rel, subfolder: v.subfolder, allow_multi: v.allow_multi });
+      await postJSON(`${API}/projects/add-current`, { pid: v.pid, rel, subfolder, allow_multi: v.allow_multi });
     } catch (e) { errs.push(`${rel.split("/").pop()}: ${e.message}`); }
   }
   await refreshProjects();
@@ -884,9 +1031,22 @@ async function refreshProjects() {
   const data = await getJSON(`${API}/projects`);
   state.projects = data.projects;
   state.activeProject = data.active_project;
-  if (!state.selectedProject || !state.projects.find((p) => p.id === state.selectedProject)) {
-    state.selectedProject = state.activeProject || (state.projects[0] && state.projects[0].id) || null;
+  const valid = (id) => !!(id && state.projects.find((p) => p.id === id));
+  if (!valid(state.selectedProject)) {
+    const remembered = localStorage.getItem("bswm_last_project");
+    state.selectedProject = valid(remembered) ? remembered
+      : (valid(state.activeProject) ? state.activeProject : (state.projects[0] && state.projects[0].id) || null);
   }
+  renderProjectList();
+  renderProjectDetail();
+}
+
+function selectProject(id) {
+  state.selectedProject = id;
+  state.projPath = "";
+  state.projSel.clear();
+  state.projLast = { v: null };
+  try { localStorage.setItem("bswm_last_project", id); } catch (e) {}
   renderProjectList();
   renderProjectDetail();
 }
@@ -896,7 +1056,7 @@ function renderProjectList() {
   box.innerHTML = "";
   if (!state.projects.length) { box.appendChild(el("div", { class: "empty" }, t("p_empty"))); return; }
   for (const p of state.projects) {
-    const item = el("div", { class: "proj-item" + (p.id === state.selectedProject ? " active" : "") , onclick: () => { state.selectedProject = p.id; state.projPath = ""; state.projSel.clear(); state.projLast = { v: null }; renderProjectList(); renderProjectDetail(); } },
+    const item = el("div", { class: "proj-item" + (p.id === state.selectedProject ? " active" : "") , onclick: () => selectProject(p.id) },
       el("span", { class: "dot", style: `background:${p.color}` }),
       el("span", { class: "p-name" }, p.name),
       p.id === state.activeProject ? el("span", { class: "star", title: "active" }, "★") : null,
@@ -1093,6 +1253,26 @@ function openProjectItem(p, i) {
   });
 }
 
+// Guardado rápido (proyecto): sobrescribe el workflow abierto de este proyecto; si no hay, "Guardar como".
+async function saveIntoProject(p) {
+  const lo = state.lastOpened;
+  if (lo && lo.scope === "project" && lo.pid === p.id && lo.ref) {
+    const ser = window.parent && window.parent.bswmSerializeGraph;
+    const data = typeof ser === "function" ? ser() : null;
+    if (!data) { setStatus($("#p-status"), t("st_no_canvas"), "error"); return; }
+    const ref = lo.ref;
+    const sub = ref.includes("/") ? ref.slice(0, ref.lastIndexOf("/")) : "";
+    const name = ref.split("/").pop();
+    try {
+      const r = await postJSON(`${API}/projects/save-canvas`, { pid: p.id, name, subfolder: sub, content: data, overwrite: true });
+      setStatus($("#p-status"), t("st_saved_to", { name: r.ref }), "ok");
+      await refreshProjects();
+    } catch (e) { setStatus($("#p-status"), e.message, "error"); }
+    return;
+  }
+  return saveCanvasProject(p);
+}
+
 // Guarda el lienzo actual de ComfyUI dentro del proyecto (en la subcarpeta actual).
 async function saveCanvasProject(p) {
   const ser = window.parent && window.parent.bswmSerializeGraph;
@@ -1101,12 +1281,13 @@ async function saveCanvasProject(p) {
   const def = (state.lastOpened && state.lastOpened.scope === "project" && state.lastOpened.pid === p.id) ? state.lastOpened.name : "";
   const v = await showForm(t("f_save_canvas"), [
     { key: "name", label: t("f_save_name"), type: "text", value: def, placeholder: "workflow.json" },
-    { key: "subfolder", label: t("f_target_sub"), type: "text", value: state.projPath, placeholder: "(root)" },
+    { key: "subfolder", label: t("f_target_sub"), type: "select", value: state.projPath, options: subfolderOptions(p) },
+    { key: "new_sub", label: t("f_sub_name"), type: "text", value: "", placeholder: "imagen/v01", show: (vv) => vv.subfolder === "__new__" },
     { key: "overwrite", label: t("f_overwrite"), type: "checkbox", value: false },
   ], t("btn_save"));
   if (!v || !v.name) return;
   try {
-    const r = await postJSON(`${API}/projects/save-canvas`, { pid: p.id, name: v.name, subfolder: v.subfolder, content: data, overwrite: v.overwrite });
+    const r = await postJSON(`${API}/projects/save-canvas`, { pid: p.id, name: v.name, subfolder: resolveSub(v), content: data, overwrite: v.overwrite });
     setStatus($("#p-status"), t("st_saved_to", { name: r.ref }), "ok");
     await refreshProjects();
   } catch (e) { setStatus($("#p-status"), e.message, "error"); }
@@ -1123,11 +1304,12 @@ async function moveProjectMany(p, refs) {
   const projOpts = state.projects.map((x) => ({ value: x.id, label: x.name }));
   const v = await showForm(t("f_move_title"), [
     { key: "pid", label: t("f_target_project"), type: "select", value: p.id, options: projOpts },
-    { key: "subfolder", label: t("f_target_sub"), type: "text", value: state.projPath, placeholder: "(root)" },
+    ...subfolderFields("pid", state.projPath),
   ], t("btn_confirm"));
   if (!v) return;
+  const target_subfolder = resolveSub(v);
   await apiThen($("#p-status"), async () => {
-    for (const ref of refs) await postJSON(`${API}/projects/move`, { pid: p.id, ref, target_pid: v.pid, target_subfolder: v.subfolder });
+    for (const ref of refs) await postJSON(`${API}/projects/move`, { pid: p.id, ref, target_pid: v.pid, target_subfolder });
   }, refreshProjects);
 }
 
@@ -1136,11 +1318,12 @@ async function duplicateProjectItem(p, i) {
   const v = await showForm(t("f_duplicate"), [
     { key: "name", label: t("f_dup_name"), type: "text", value: "", placeholder: i.name },
     { key: "target_pid", label: t("f_dup_target"), type: "select", value: p.id, options: projOpts },
-    { key: "target_subfolder", label: t("f_target_sub"), type: "text", value: i.subfolder, placeholder: "(root)" },
+    ...subfolderFields("target_pid", i.subfolder),
   ], t("btn_confirm"));
   if (!v) return;
+  const target_subfolder = resolveSub(v);
   await apiThen($("#p-status"), () => postJSON(`${API}/projects/duplicate`, {
-    pid: p.id, ref: i.ref, new_name: v.name || null, target_pid: v.target_pid, target_subfolder: v.target_subfolder,
+    pid: p.id, ref: i.ref, new_name: v.name || null, target_pid: v.target_pid, target_subfolder,
   }), refreshProjects);
 }
 
@@ -1186,7 +1369,7 @@ async function projectForm(existing) {
     { key: "name", label: t("f_name"), type: "text", value: cur.name },
     { key: "color", label: t("f_color"), type: "color", value: cur.color },
     { key: "storage", label: t("f_storage"), type: "select", value: cur.storage, options: storageOpts },
-    { key: "folder", label: t("f_folder_path"), type: "text", value: cur.folder || "", placeholder: "X:/workflows/pepe", show: (v) => v.storage === "folder" },
+    { key: "folder", label: t("lbl_server_path"), type: "path", value: cur.folder || "", placeholder: "/path/on/server/projects/pepe", show: (v) => v.storage === "folder" },
     { key: "git_mode", label: t("f_git_mode"), type: "select", value: (cur.git || {}).mode || "none", options: gitOpts },
     { key: "remote_url", label: t("f_remote_url"), type: "text", value: (cur.git || {}).remote_url || "", placeholder: "git@… / https://…", show: (v) => v.git_mode === "dedicated" },
     { key: "notes", label: t("f_notes"), type: "textarea", value: cur.notes || "" },
@@ -1194,7 +1377,10 @@ async function projectForm(existing) {
   const v = await showForm(isEdit ? t("f_edit_project") : t("f_new_project"), fields, t("btn_save"));
   if (!v || !v.name) return;
   const payload = {
-    name: v.name, color: v.color, storage: v.storage, folder: v.folder,
+    name: v.name, color: v.color, storage: v.storage,
+    // Solo enviamos carpeta si el almacenamiento es "folder"; así, al cambiar a virtual, la carpeta
+    // (que queda oculta pero conserva su valor) no fuerza de nuevo el modo folder.
+    folder: v.storage === "folder" ? v.folder : "",
     git: { mode: v.git_mode, remote_url: v.remote_url }, notes: v.notes,
   };
   try {
@@ -1478,6 +1664,7 @@ function wireEvents() {
   // General
   $("#g-refresh").addEventListener("click", loadGeneral);
   $("#g-filter").addEventListener("input", () => { state.genSel.clear(); state.genLast = { v: null }; renderGeneral(); });
+  $("#g-save-into").addEventListener("click", saveIntoGeneral);
   $("#g-save").addEventListener("click", saveCanvasGeneral);
   $("#g-newfolder").addEventListener("click", () => newFolderIn(state.genPath));
   $("#g-import").addEventListener("click", () => importFiles("general"));
@@ -1490,6 +1677,7 @@ function wireEvents() {
   $("#p-edit").addEventListener("click", () => { const p = currentProject(); if (p) projectForm(p); });
   $("#p-delete").addEventListener("click", () => { const p = currentProject(); if (p) deleteProject(p); });
   $("#p-active-btn").addEventListener("click", () => { const p = currentProject(); if (p) toggleActive(p); });
+  $("#p-save-into").addEventListener("click", () => { const p = currentProject(); if (p) saveIntoProject(p); });
   $("#p-save").addEventListener("click", () => { const p = currentProject(); if (p) saveCanvasProject(p); });
   $("#p-add-sub").addEventListener("click", () => { const p = currentProject(); if (p) addSubfolderIn(p, state.projPath); });
   $("#p-export").addEventListener("click", async () => {
@@ -1519,6 +1707,10 @@ function wireEvents() {
   }));
 
   // Settings
+  $("#s-root-browse").addEventListener("click", async () => {
+    const picked = await browseServerFolder($("#s-root").value.trim());
+    if (picked != null) $("#s-root").value = picked;
+  });
   $("#s-root-save").addEventListener("click", () => saveRoot($("#s-root").value.trim()));
   $("#s-root-reset").addEventListener("click", () => saveRoot(""));
   $("#s-db-export").addEventListener("click", () => { window.location = `${API}/db/export`; });

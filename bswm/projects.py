@@ -129,7 +129,10 @@ def create_project(name, color="#AC1F23", storage="virtual", folder=None,
         if not folder:
             raise ValueError("Un proyecto con carpeta vinculada necesita una ruta.")
         folder = os.path.abspath(folder)
-        os.makedirs(folder, exist_ok=True)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"No se pudo usar la carpeta en el servidor: {exc}")
     else:
         folder = None
         if mode == "dedicated":
@@ -182,7 +185,10 @@ def update_project(pid, **fields):
         folder = (fields["folder"] or "").strip()
         if folder:
             folder = os.path.abspath(folder)
-            os.makedirs(folder, exist_ok=True)
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError as exc:
+                raise ValueError(f"No se pudo usar la carpeta en el servidor: {exc}")
             p["folder"] = folder
             p["storage"] = "folder"
         else:

@@ -21,8 +21,9 @@ import test_util       # noqa: E402
 import test_workflows  # noqa: E402
 import test_projects   # noqa: E402
 import test_git        # noqa: E402
+import test_fsbrowse   # noqa: E402
 
-MODULES = [test_util, test_workflows, test_projects, test_git]
+MODULES = [test_util, test_workflows, test_projects, test_git, test_fsbrowse]
 
 
 def run():

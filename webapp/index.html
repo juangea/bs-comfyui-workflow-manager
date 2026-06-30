@@ -44,7 +44,8 @@
         <input id="g-filter" type="text" class="filter" data-i18n-ph="ph_filter_wf"
                placeholder="Search: multiple terms (e.g. wan video)" />
         <span class="spacer"></span>
-        <button id="g-save" class="btn small" data-i18n="btn_save_canvas" title="Save the current ComfyUI canvas into this folder">Save canvas…</button>
+        <button id="g-save-into" class="btn small primary" data-i18n="btn_save_into_general" data-i18n-title="st_save_native_hint">Save to folder</button>
+        <button id="g-save" class="btn small" data-i18n="btn_save_as" title="Save the current ComfyUI canvas under a new name/folder">Save as…</button>
         <button id="g-newfolder" class="btn small" data-i18n="btn_new_folder">New folder</button>
         <button id="g-import" class="btn small" data-i18n="btn_import">Import…</button>
         <button id="g-from-comfy" class="btn small" data-i18n="btn_from_comfy">From ComfyUI…</button>
@@ -106,7 +107,8 @@
               <span id="p-storage-badge"></span>
               <span class="spacer"></span>
               <button id="p-active-btn" class="btn small" data-i18n="btn_set_active">Set active</button>
-              <button id="p-save" class="btn small" data-i18n="btn_save_canvas" title="Save the current ComfyUI canvas into this project">Save canvas…</button>
+              <button id="p-save-into" class="btn small primary" data-i18n="btn_save_into" data-i18n-title="st_save_native_hint">Save to project</button>
+              <button id="p-save" class="btn small" data-i18n="btn_save_as" title="Save the current ComfyUI canvas under a new name/subfolder">Save as…</button>
               <button id="p-edit" class="btn small" data-i18n="btn_edit">Edit</button>
               <button id="p-export" class="btn small" data-i18n="btn_export_project">Export</button>
               <button id="p-delete" class="btn small danger" data-i18n="btn_delete">Delete</button>
@@ -209,6 +211,7 @@
       <p class="muted" data-i18n="root_desc">Folder the General view manages. Leave empty to use ComfyUI's own workflows folder (recommended: native open works).</p>
       <div class="row toolbar" style="margin-top:8px">
         <input id="s-root" type="text" class="filter" style="flex:1" data-i18n-ph="ph_root" placeholder="(ComfyUI default)" />
+        <button id="s-root-browse" class="btn small" data-i18n="btn_browse">Browse…</button>
         <button id="s-root-save" class="btn small primary" data-i18n="btn_save">Save</button>
         <button id="s-root-reset" class="btn small" data-i18n="btn_reset_default">Reset to default</button>
       </div>

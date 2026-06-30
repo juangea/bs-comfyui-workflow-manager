@@ -20,7 +20,7 @@ from server import PromptServer
 # Asegura el content-type correcto al servir las fuentes (.woff2).
 mimetypes.add_type("font/woff2", ".woff2")
 
-from . import config, git_ops, projects, workflows
+from . import config, fsbrowse, git_ops, projects, workflows
 from .exporter import manager as export_manager
 from .util import normalize_rel, safe_join
 
@@ -105,6 +105,30 @@ async def api_config_db(request):
     data = await _body(request)
     config.set_db_path(data.get("path"))
     return web.json_response({"ok": True, "db_path": config.get_db_path()})
+
+
+# ----------------------------- API: explorador de carpetas del servidor -----------------------------
+@routes.get(PREFIX + "/api/fs/list")
+async def api_fs_list(request):
+    try:
+        return web.json_response(fsbrowse.list_dir(request.rel_url.query.get("path", "")))
+    except ValueError as exc:
+        return _err(exc, 400)
+    except Exception as exc:
+        log.exception("api/fs/list")
+        return _err(exc, 500)
+
+
+@routes.post(PREFIX + "/api/fs/mkdir")
+async def api_fs_mkdir(request):
+    data = await _body(request)
+    try:
+        full = fsbrowse.mkdir(data.get("path"), data.get("name"))
+        return web.json_response({"ok": True, "path": full})
+    except ValueError as exc:
+        return _err(exc, 400)
+    except OSError as exc:
+        return _err(str(exc), 400)
 
 
 # ----------------------------- API: workflows (general) -----------------------------
