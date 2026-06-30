@@ -131,7 +131,7 @@ app.registerExtension({
           id: "bs-workflow-manager",
           icon: "pi pi-folder-open",
           title: "BS-WM",
-          tooltip: "BS Workflow Manager — organiza tus workflows por carpetas y proyectos",
+          tooltip: "BS Workflow Manager — organize your workflows by folders and projects",
           type: "custom",
           render: buildIframe,
         });
