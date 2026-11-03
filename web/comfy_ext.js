@@ -20,12 +20,14 @@ const WORKFLOWS_DIR = "workflows/";
 const CANVAS_DRAG_TYPE = "application/x-bswm-workflows";
 const SIDEBAR_ICON = "bswm-sidebar-icon";
 const DELETE_SETTLE_MS = 2000;
+const MAX_BASE_LENGTH = 20000000;   // más grande no se envía de vuelta al servidor: se comparan solo las fechas
 
 const TEXT = {
   en: {
     save: "Save workflow", save_short: "Save", save_to_project: "Save to Project…",
     tooltip: "BS Workflow Manager — organize your workflows by folders and projects",
     saved_mirror: "Also saved to the {project} project folder",
+    saved_conflict: "The project folder had another version of this workflow. It was kept as {file}",
     mirror_failed: "Saved in ComfyUI, but the project folder couldn't be updated: {error}",
     open_failed: "{name} couldn't be opened.",
     err_folder_not_found: "Folder not found: {path}", err_not_found: "Not found: {path}", err_exists: "Already exists: {path}",
@@ -34,6 +36,7 @@ const TEXT = {
     save: "Guardar workflow", save_short: "Guardar", save_to_project: "Guardar en proyecto…",
     tooltip: "BS Workflow Manager — organiza tus workflows por carpetas y proyectos",
     saved_mirror: "Guardado también en la carpeta del proyecto {project}",
+    saved_conflict: "La carpeta del proyecto tenía otra versión de este workflow. Se ha conservado como {file}",
     mirror_failed: "Guardado en ComfyUI, pero no se pudo actualizar la carpeta del proyecto: {error}",
     open_failed: "No se ha podido abrir {name}.",
     err_folder_not_found: "Carpeta no encontrada: {path}", err_not_found: "No encontrado: {path}", err_exists: "Ya existe: {path}",
@@ -60,7 +63,7 @@ function store() {
 
 function toast(severity, summary) {
   try {
-    app.extensionManager.toast.add({ severity, summary, life: severity === "error" ? 8000 : 2500 });
+    app.extensionManager.toast.add({ severity, summary, life: severity === "success" ? 2500 : 8000 });
   } catch (e) { /* frontends sin toast */ }
 }
 
@@ -102,13 +105,14 @@ function cancelPendingDelete(path) {
   }
 }
 
-async function afterSaved(rel, created = false) {
+async function afterSaved(rel, created = false, previous = null, base = null) {
   dirtyStamp++;
   try {
-    const { mirrored } = await postApi("/events/saved", { path: rel, created });
+    const { mirrored, conflict } = await postApi("/events/saved", { path: rel, created, previous, base });
     dirtyStamp++;
+    if (conflict) toast("warn", text("saved_conflict", { file: conflict }));
     // Con el autoguardado, sería un aviso cada pocos segundos.
-    if (mirrored && app.extensionManager?.setting?.get?.("Comfy.Workflow.AutoSave") !== "after delay") {
+    else if (mirrored && app.extensionManager?.setting?.get?.("Comfy.Workflow.AutoSave") !== "after delay") {
       toast("success", text("saved_mirror", { project: mirrored }));
     }
   } catch (e) {
@@ -128,7 +132,11 @@ function installHooks() {
     if (name === "saveWorkflow") {
       // Un archivo nuevo, salvo que sustituya a uno que se acaba de borrar con "Guardar como".
       const created = !overwritten.delete(relOf(wf.path)) && !!wf.isTemporary;
-      after(() => { const rel = relOf(wf.path); if (rel) afterSaved(rel, created); });
+      // Lo que conocía la pestaña: guardar cambia la fecha y el contenido del archivo.
+      const previous = wf.isTemporary ? null : wf.lastModified;
+      const known = wf.originalContent;
+      const base = typeof known === "string" && known.length < MAX_BASE_LENGTH ? known : null;
+      after(() => { const rel = relOf(wf.path); if (rel) afterSaved(rel, created, previous, base); });
       onError(() => { saveFailed = true; });
     } else if (name === "renameWorkflow") {
       const oldRel = relOf(wf.path);
@@ -197,6 +205,25 @@ function find(rel) {
   return s ? s.getWorkflowByPath(WORKFLOWS_DIR + rel) : null;
 }
 
+// Al sincronizar, ComfyUI vacía las pestañas en segundo plano cuyo archivo ha cambiado en el disco, también
+// si tienen cambios sin guardar: se perderían sin avisar. Mientras dura, a esas no se les deja vaciarse.
+let syncing = Promise.resolve();
+
+function syncKeepingChanges() {
+  const result = syncing.then(async () => {
+    const s = store();
+    const kept = s.openWorkflows.filter((w) => w.isModified && !s.isActive(w));
+    for (const w of kept) w.unload = () => {};
+    try {
+      await s.syncWorkflows();
+    } finally {
+      for (const w of kept) delete w.unload;
+    }
+  });
+  syncing = result.catch(() => {});
+  return result;
+}
+
 function isOpen(rel) {
   const s = store();
   const wf = find(rel);
@@ -236,8 +263,7 @@ window.bswmBridge = {
   },
 
   async sync() {
-    const s = store();
-    if (s) await s.syncWorkflows();
+    if (store()) await syncKeepingChanges();
   },
 
   // Abre un workflow; si ya tiene pestaña, solo la activa.
@@ -245,7 +271,7 @@ window.bswmBridge = {
     const s = store();
     let wf = find(rel);
     if (!wf) {
-      await s.syncWorkflows();
+      await syncKeepingChanges();
       wf = find(rel);
     }
     if (!wf) {
@@ -304,13 +330,14 @@ window.bswmBridge = {
   async save() {
     const s = store();
     saveFailed = false;
-    await app.extensionManager.command.execute("Comfy.SaveWorkflow");
+    // Antes de guardar: mientras tanto se puede cambiar de pestaña, y el resultado es de esta.
     const a = s && s.activeWorkflow;
+    await app.extensionManager.command.execute("Comfy.SaveWorkflow");
     const rel = a ? relOf(a.path) : null;
     // El comando no propaga los errores: solo muestra un aviso, y a quien llama le parece que ha ido bien.
     const failed = saveFailed || !!(a && !a.isTemporary && a.isModified);
     if (rel && !hooksInstalled && !a.isTemporary && !failed) await afterSaved(rel);
-    return { rel, temporary: !!(a && a.isTemporary), failed };
+    return { rel, name: a ? a.filename : "", temporary: !!(a && a.isTemporary), failed };
   },
 
   // Guarda un workflow todavía sin archivo en una ruta concreta de la carpeta de ComfyUI.
@@ -320,7 +347,8 @@ window.bswmBridge = {
     if (!wf || !wf.isTemporary) throw new Error("Not a new workflow");
     const path = WORKFLOWS_DIR + rel;
     const existing = s.getWorkflowByPath(path);
-    if (existing && !existing.isTemporary) throw new Error("exists");
+    // Otra pestaña sin guardar con ese nombre también cuenta: ocupar su ruta la dejaría inaccesible.
+    if (existing && (!existing.isTemporary || wf.path !== path)) throw new Error("exists");
     await s.renameWorkflow(wf, path);
     const tracker = wf.changeTracker;
     if (tracker) (tracker.prepareForSave || tracker.checkState).call(tracker);
@@ -358,7 +386,7 @@ function installCanvasDrop() {
       for (const rel of JSON.parse(e.dataTransfer.getData(CANVAS_DRAG_TYPE))) {
         if (!isOpen(rel) || !window.bswmBridge.isLoaded(rel)) {
           await postApi("/workflow/prepare-open", { path: rel });
-          await store().syncWorkflows();
+          await syncKeepingChanges();
         }
         await window.bswmBridge.open(rel);
       }

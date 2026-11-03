@@ -217,7 +217,9 @@ async def api_workflow_import(request):
 @post("/events/saved")
 async def api_event_saved(request):
     data = await _body(request)
-    return _ok(mirrored=projects.on_saved(data.get("path"), bool(data.get("created"))))
+    name, conflict = projects.mirror_saved(data.get("path"), bool(data.get("created")), data.get("previous"),
+                                           data.get("base"))
+    return _ok(mirrored=name, conflict=conflict)
 
 
 @post("/events/renamed")
@@ -310,7 +312,7 @@ def _export_files(data):
     for path in data.get("paths") or []:
         rel = normalize_rel(path)
         files.append((projects.source_file(rel), rel))
-    return data.get("name") or "workflows", files
+    return str(data.get("name") or "workflows"), files
 
 
 @post("/export")

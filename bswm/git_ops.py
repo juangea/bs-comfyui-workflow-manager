@@ -17,7 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .util import UserError, is_within, same_path
+from .util import UserError, reaches, same_path
 
 GIT = "git"
 GH = "gh"
@@ -27,11 +27,13 @@ _ENV = {
     "GIT_TERMINAL_PROMPT": "0",            # sin credenciales guardadas: falla, no se queda esperando
     "GIT_ALLOW_PROTOCOL": "https:http:ssh:git:file",
     "GH_PROMPT_DISABLED": "1",
+    "GIT_OPTIONAL_LOCKS": "0",             # consultar no reescribe el índice, ni lanza los hooks de eso
     "LC_ALL": "C",                         # mensajes en inglés: hay que poder reconocerlos
 }
 _REMOTE_OK = re.compile(
-    r"^(?:(?:https?|ssh|git|file)://[^\s]+"     # URL con esquema
+    r"^(?:(?i:https?|ssh|git|file)://[^\s]+"    # URL con esquema
     r"|[\w.-]+@[\w.-]+:[^\s]+"                  # git@host:ruta
+    r"|[\w.-]{2,}:[^\s/][^\s]*"                 # alias de ~/.ssh/config: github:equipo/repo.git
     r"|/[^\s]*"                                 # ruta absoluta POSIX
     r"|[A-Za-z]:[\\/][^\s]*"                    # ruta absoluta Windows
     r"|\\\\[^\s]+)$"                            # recurso de red Windows
@@ -65,12 +67,27 @@ def _run(args, cwd=None, timeout=180):
 
 
 def _kill(proc):
-    """Termina el comando y sus hijos (ssh): si no, sus tuberías seguirían abiertas y esto no acabaría."""
+    """Termina el comando y sus hijos (ssh): si no, sus tuberías seguirían abiertas y esto no acabaría.
+
+    En Linux, primero con SIGTERM: git quita su `index.lock` al recibirlo, y si no el repositorio se queda
+    bloqueado. Windows no tiene un aviso equivalente: si queda un bloqueo, git lo explica en su error.
+    """
     try:
         if os.name == "nt":
+            try:
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
             proc.kill()
         else:
-            os.killpg(proc.pid, signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.communicate(timeout=5)
+                return
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate(timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         pass
@@ -142,12 +159,18 @@ def is_blocked(folder, protected):
     tampoco se puede asegurar que no sea el de ComfyUI.
     """
     roots = [r for r in ([protected] if isinstance(protected, str) else protected) if r]
-    if any(is_within(root, folder) for root in roots):
+    # La que contiene a ComfyUI tampoco: su `git add -A` se llevaría los archivos de ComfyUI.
+    if any(reaches(root, folder) or reaches(folder, root) for root in roots):
         return True
     if os.path.isdir(folder) and _repo_error(folder):
         return True
     top = _toplevel(folder)
-    return bool(top and any(is_within(top, root) for root in roots))
+    if top and any(reaches(top, root) for root in roots):
+        return True
+    # Un `.git` que es un archivo (worktree) puede apuntar al repositorio de ComfyUI desde otra carpeta.
+    rc, out, _ = _git(folder, "rev-parse", "--git-common-dir") if top else (1, "", "")
+    common = os.path.abspath(os.path.join(folder, out.strip())) if rc == 0 and out.strip() else None
+    return bool(common and any(reaches(root, common) for root in roots))
 
 
 def info(folder, protected):
@@ -190,7 +213,8 @@ def status(folder):
     if rc != 0:
         return []
     items = []
-    for line in out.splitlines():
+    # split y no splitlines: esta también corta por caracteres raros que puede haber en un nombre.
+    for line in out.split("\n"):
         if line.strip():
             items.append({"code": line[:2].strip(), "path": line[3:].strip().strip('"')})
     return items
@@ -199,16 +223,16 @@ def status(folder):
 def log(folder, n=50):
     """Historial de `folder`: [{hash, short, author, date(ts), subject}]."""
     sep = "\x1f"
-    fmt = sep.join(["%H", "%h", "%an", "%at", "%s"])
+    fmt = sep.join(["%H", "%h", "%at", "%an", "%s"])     # primero los campos fijos: lo demás lo escribe cualquiera
     rc, out, _ = _git(folder, "log", f"-n{max(1, min(int(n), 500))}", f"--pretty=format:{fmt}", "--", ".")
     if rc != 0:
         return []
     rows = []
-    for line in out.splitlines():
-        parts = line.split(sep)
+    for line in out.split("\n"):
+        parts = line.split(sep, 4)
         if len(parts) == 5:
-            rows.append({"hash": parts[0], "short": parts[1], "author": parts[2],
-                         "date": float(parts[3] or 0), "subject": parts[4]})
+            rows.append({"hash": parts[0], "short": parts[1], "date": float(parts[2] or 0),
+                         "author": parts[3], "subject": parts[4]})
     return rows
 
 

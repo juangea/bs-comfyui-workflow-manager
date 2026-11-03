@@ -117,7 +117,7 @@ def test_drag_out_of_project_unlinks():
 
 def test_rename_and_general_moves_update_links():
     fresh_env()
-    from bswm import projects
+    from bswm import projects, workflows as wf
     _seed()
     p = projects.create_project("pepe")
     projects.link_workflow(p["id"], "clientes/wf2.json")
@@ -126,8 +126,10 @@ def test_rename_and_general_moves_update_links():
     projects.rename_general_folder("clientes", "studio")
     item = _project(projects.tree(), p["id"])["items"][0]
     assert item["path"] == "studio/nuevo.json" and item["exists"]
+    wf.relocate("studio/nuevo.json", "otro.json")
     projects.on_renamed("studio/nuevo.json", "otro.json")
     assert _project(projects.tree(), p["id"])["items"][0]["path"] == "otro.json"
+    wf.remove_file("otro.json")
     projects.on_deleted("otro.json")
     assert not _project(projects.tree(), p["id"])["items"]
 
@@ -543,13 +545,13 @@ def test_moving_a_link_never_takes_the_file_from_its_folder_project():
     c, _g = _with_folder(base, "tres")
     v, w = projects.create_project("v"), projects.create_project("w")
     wf.write("uno/x.json", _wf("x"))
-    projects.add_to_project("uno/x.json", v["id"])
+    projects.add_to_project("uno/x.json", v["id"], allow_multi=True)
     # A "Workflows": solo se quita el vínculo, aunque se suelte en una carpeta.
     assert projects.move_item("uno/x.json", v["id"], None, "carpeta", dry_run=True)["new"] == "uno/x.json"
     projects.move_item("uno/x.json", v["id"], None, "carpeta")
     assert wf.exists("uno/x.json") and _item(projects.tree(), v["id"], "x.json") is None
     # A otro proyecto sin carpeta: el vínculo cambia de proyecto.
-    projects.add_to_project("uno/x.json", v["id"])
+    projects.add_to_project("uno/x.json", v["id"], allow_multi=True)
     projects.move_item("uno/x.json", v["id"], w["id"], "")
     assert _item(projects.tree(), w["id"], "x.json")["path"] == "uno/x.json"
     # A otro proyecto con carpeta: recibe una copia y el original sigue en su proyecto.
@@ -567,7 +569,7 @@ def test_links_follow_subfolder_changes_of_the_owning_project():
     v = projects.create_project("v")
     projects.add_subfolder(a["id"], "viejo")
     wf.write("uno/viejo/x.json", _wf("x"))
-    projects.add_to_project("uno/viejo/x.json", v["id"])
+    projects.add_to_project("uno/viejo/x.json", v["id"], allow_multi=True)
     projects.rename_subfolder(a["id"], "viejo", "nuevo")
     item = _item(projects.tree(), v["id"], "x.json")
     assert item["path"] == "uno/nuevo/x.json" and item["exists"]
@@ -581,7 +583,7 @@ def test_deleting_projects_respects_shared_files():
     a, _f = _with_folder(base, "uno")
     v, w = projects.create_project("v"), projects.create_project("w")
     wf.write("uno/x.json", _wf("x"))
-    projects.add_to_project("uno/x.json", v["id"])
+    projects.add_to_project("uno/x.json", v["id"], allow_multi=True)
     projects.add_to_project("uno/x.json", w["id"], allow_multi=True)
     projects.delete_project(v["id"], delete_files=True)
     assert wf.exists("uno/x.json"), "el archivo es del proyecto con carpeta"
@@ -595,7 +597,7 @@ def test_giving_a_folder_to_a_project_copies_files_of_other_folder_projects():
     a, _f = _with_folder(base, "uno")
     v = projects.create_project("v")
     wf.write("uno/x.json", _wf("x"))
-    projects.add_to_project("uno/x.json", v["id"])
+    projects.add_to_project("uno/x.json", v["id"], allow_multi=True)
     projects.update_project(v["id"], folder=os.path.join(base, "fuera", "v"))
     tree = projects.tree()
     assert wf.exists("uno/x.json") and wf.exists("v/x.json")
@@ -737,7 +739,7 @@ def test_moving_a_project_folder_into_comfy_takes_its_files():
     f, _ = _with_folder(base)
     v = projects.create_project("v")
     wf.write("render/sub/a.json", _wf("a"))
-    projects.add_to_project("render/sub/a.json", v["id"])
+    projects.add_to_project("render/sub/a.json", v["id"], allow_multi=True)
     projects.update_project(f["id"], folder=wf.abs_path("dentro/proyecto"))
     tree = projects.tree()
     assert [i["path"] for i in _project(tree, f["id"])["items"]] == ["dentro/proyecto/sub/a.json"]

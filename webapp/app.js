@@ -67,7 +67,7 @@ const I18N = {
     h_changes: "Pending changes", h_history: "History", h_git_jobs: "Git operations",
     no_changes: "No pending changes.", no_history: "No commits yet.",
     f_gh_title: "Create GitHub repository", f_gh_name: "Repository name", f_gh_private: "Private",
-    confirm_restore: "Restore the workflows of this folder to commit {commit}? Uncommitted changes will be lost.",
+    confirm_restore: "Restore the workflows of this folder to commit {commit}? Uncommitted changes will be lost. Files added after that commit stay in the folder.",
     state_queued: "queued", state_running: "running", state_done: "done", state_error: "error",
     job_init: "Create repository", job_commit: "Commit", job_remote: "Set remote", job_push: "Push", job_pull: "Pull", job_restore: "Restore", job_gh_create: "Create on GitHub",
     h_view_options: "View", lbl_show_linked: "Also list project workflows under \"Workflows\"",
@@ -151,7 +151,7 @@ const I18N = {
     h_changes: "Cambios pendientes", h_history: "Historial", h_git_jobs: "Operaciones Git",
     no_changes: "No hay cambios pendientes.", no_history: "Aún no hay commits.",
     f_gh_title: "Crear repositorio en GitHub", f_gh_name: "Nombre del repositorio", f_gh_private: "Privado",
-    confirm_restore: "¿Restaurar los workflows de esta carpeta al commit {commit}? Se perderán los cambios sin confirmar.",
+    confirm_restore: "¿Restaurar los workflows de esta carpeta al commit {commit}? Se perderán los cambios sin confirmar. Los archivos añadidos después de ese commit se quedan en la carpeta.",
     state_queued: "en cola", state_running: "en curso", state_done: "hecho", state_error: "error",
     job_init: "Crear repositorio", job_commit: "Commit", job_remote: "Fijar remoto", job_push: "Push", job_pull: "Pull", job_restore: "Restaurar", job_gh_create: "Crear en GitHub",
     h_view_options: "Vista", lbl_show_linked: "Mostrar también en \"Workflows\" los workflows de proyectos",
@@ -273,7 +273,10 @@ const state = {
   lastProject: storageGet("bswm_last_project", ""),
   showLinked: storageGet("bswm_show_linked", "0") === "1",
   gitProject: null,
-  exportSeen: new Set(),
+  openClick: 0,
+  gitRefresh: 0,
+  gitShown: null,
+  exportPending: new Set(),
   exportTimer: null,
   gitTimer: null,
   importTarget: null,
@@ -467,6 +470,7 @@ function openModal(title, onSubmit, okLabel, okClass) {
 }
 
 function showConfirm(title, message, okLabel, danger = false, extra = null) {
+  closeContextMenu();
   return new Promise((resolve) => {
     const body = $("#modal-body");
     body.innerHTML = "";
@@ -479,6 +483,7 @@ function showConfirm(title, message, okLabel, danger = false, extra = null) {
 
 // fields: [{key,label,type,value,placeholder,options,hint}]
 function showForm(title, fields, okLabel) {
+  closeContextMenu();
   return new Promise((resolve) => {
     const body = $("#modal-body");
     body.innerHTML = "";
@@ -1021,6 +1026,7 @@ async function openItem(item) {
   const b = bridge();
   if (!b) { setStatus(t("st_no_bridge"), "error"); return; }
   if (item.pid) rememberProject(item.pid);
+  const click = ++state.openClick;
   try {
     // Con pestaña abierta solo se cambia a ella: nunca se recarga desde el disco. Salvo que aún no esté
     // cargada (restaurada al arrancar): esa se leerá del disco, y debe ser la copia más reciente.
@@ -1028,6 +1034,8 @@ async function openItem(item) {
       await postJSON(`${API}/workflow/prepare-open`, { path: item.path });
       await b.sync();
     }
+    // Si mientras tanto se ha hecho clic en otro, manda ese.
+    if (click !== state.openClick) return;
     await b.open(item.path);
   } catch (e) {
     setStatus(errText(e), "error");
@@ -1888,7 +1896,9 @@ function updateSaveBar() {
   const a = state.tab.active;
   const save = $("#sb-save");
   const toProject = $("#sb-save-project");
-  save.disabled = toProject.disabled = !b || !a;
+  save.disabled = !b || !a;
+  // Las pestañas de subgrafos no son archivos de la carpeta de workflows.
+  toProject.disabled = !b || !a || (!a.temporary && !a.rel);
   $("#sb-mod").classList.toggle("hidden", !(a && a.modified));
   if (!b) {
     $("#sb-name").textContent = "";
@@ -1899,6 +1909,7 @@ function updateSaveBar() {
   const target = $("#sb-target");
   if (!a) { target.textContent = ""; return; }
   if (a.temporary) { target.textContent = t("sb_unsaved"); return; }
+  if (!a.rel) { target.textContent = ""; return; }
   const p = projectOfPath(a.rel);
   if (p && p.mirror) target.textContent = t("sb_project_folder", { project: p.name });
   else if (p) target.textContent = t("sb_project", { project: p.name });
@@ -1913,7 +1924,7 @@ async function saveActive() {
     if (res.temporary) { setStatus(t("st_save_cancelled")); return; }
     if (res.failed) { setStatus(t("st_save_failed"), "error"); return; }
     await refresh();
-    setStatus(t("st_saved", { name: (res.rel || "").split("/").pop() }), "ok");
+    setStatus(t("st_saved", { name: res.name }), "ok");
   } catch (e) {
     setStatus(errText(e), "error");
   }
@@ -1933,8 +1944,11 @@ async function saveToProject() {
   fields.push(...destinationFields(defaultDestination(true), { projectsOnly: true }));
   const v = await showForm(t("f_save_project_title"), fields, t("btn_save"));
   if (!v) return;
-  const now = b.getState().active;
-  if (!now || now.rel !== a.rel || now.name !== a.name) {
+  const sameTab = () => {
+    const now = b.getState().active;
+    return now && now.rel === a.rel && now.name === a.name;
+  };
+  if (!sameTab()) {
     setStatus(t("st_tab_changed"), "error");
     return;
   }
@@ -1948,6 +1962,7 @@ async function saveToProject() {
       rel = dir ? dir + "/" + file : file;
       // ComfyUI solo conoce su carpeta: el archivo puede existir ya solo en la del proyecto.
       await postJSON(`${API}/workflow/check-free`, { path: rel });
+      if (!sameTab()) throw new Error(t("st_tab_changed"));
       try {
         await b.saveActiveAs(rel);
       } catch (e) {
@@ -1974,14 +1989,30 @@ function exportItems(selected) {
 
 async function startExport(body) {
   try {
-    await postJSON(`${API}/export`, body);
+    const { job } = await postJSON(`${API}/export`, body);
+    state.exportPending.add(job);
+    saveExportsPending();
     pollExports();
-    if (!state.exportTimer) {
-      state.exportTimer = setInterval(async () => {
-        if (!(await pollExports())) { clearInterval(state.exportTimer); state.exportTimer = null; }
-      }, 800);
-    }
+    watchExports();
   } catch (e) { setStatus(errText(e), "error"); }
+}
+
+function watchExports() {
+  if (state.exportTimer) return;
+  state.exportTimer = setInterval(async () => {
+    if (!(await pollExports())) { clearInterval(state.exportTimer); state.exportTimer = null; }
+  }, 800);
+}
+
+function saveExportsPending() {
+  storageSet("bswm_exports_pending", JSON.stringify([...state.exportPending]));
+}
+
+// Cerrar el panel destruye el iframe: al volver a abrirlo sigue con las descargas que este navegador dejó
+// pendientes, y solo con esas. Las de otro navegador del mismo usuario son suyas.
+async function resumeExports() {
+  try { state.exportPending = new Set(JSON.parse(storageGet("bswm_exports_pending", "[]"))); } catch (e) { /* se ignora */ }
+  if (state.exportPending.size && await pollExports()) watchExports();
 }
 
 async function pollExports() {
@@ -1992,11 +2023,17 @@ async function pollExports() {
     for (const j of jobs) {
       box.appendChild(el("div", { class: "export-job" + (j.state === "error" ? " error" : "") },
         el("span", { class: "grow" }, `${j.name}.zip · ${j.error || (j.ready ? t("export_ready") : `${j.done}/${j.total}`)}`)));
-      if (j.ready && !state.exportSeen.has(j.id)) {
-        state.exportSeen.add(j.id);
+      if (j.ready && state.exportPending.delete(j.id)) {
+        saveExportsPending();
         download(`${API}/export/download?id=${encodeURIComponent(j.id)}`, `${j.name}.zip`).catch((e) => setStatus(errText(e), "error"));
       }
     }
+    // Las que han fallado, o ya no existen tras reiniciar el servidor, no van a poder descargarse.
+    for (const id of [...state.exportPending]) {
+      const job = jobs.find((j) => j.id === id);
+      if (!job || job.state === "error") state.exportPending.delete(id);
+    }
+    saveExportsPending();
     const active = jobs.some((j) => j.state === "queued" || j.state === "running");
     if (!active && jobs.length) {
       if (jobs.every((j) => j.state !== "error")) setTimeout(clearExports, 4000);
@@ -2012,10 +2049,9 @@ async function clearExports() {
   // terminado otra que aún no se ha descargado: el siguiente sondeo se encargará de ella.
   try {
     const { jobs } = await getJSON(`${API}/export/status`);
-    if (jobs.some((j) => j.state === "queued" || j.state === "running" || (j.ready && !state.exportSeen.has(j.id)))) return;
+    if (jobs.some((j) => j.state === "queued" || j.state === "running" || (j.ready && state.exportPending.has(j.id)))) return;
     await postJSON(`${API}/export/clear`, {});
   } catch (e) { /* silencioso */ }
-  state.exportSeen.clear();
   $("#exports").innerHTML = "";
 }
 
@@ -2109,11 +2145,21 @@ function showGitOk() {
 
 async function refreshGitInfo() {
   const pid = $("#git-project").value;
+  // Lo de otro proyecto no puede seguir a la vista: sus botones actuarían sobre el seleccionado.
+  if (pid !== state.gitShown) {
+    for (const id of ["#git-info", "#git-changes", "#git-log"]) $(id).innerHTML = "";
+    $("#git-changes-sum").textContent = "";
+    $("#git-remote-url").value = "";
+    $("#git-actions").classList.add("hidden");
+  }
+  state.gitShown = pid;
   state.gitProject = pid;
+  const refreshId = ++state.gitRefresh;
   const status = $("#git-status");
   setNodeStatus(status, "");
   try {
     const info = await getJSON(`${API}/git/info?project=${encodeURIComponent(pid)}`);
+    if (refreshId !== state.gitRefresh) return;     // ya se ha elegido otro proyecto
     const box = $("#git-info");
     box.innerHTML = "";
     box.appendChild(el("div", { class: "kv" }, el("b", {}, info.folder)));
@@ -2155,6 +2201,7 @@ async function refreshGitInfo() {
     $("#git-changes-sum").textContent = info.changes.length ? String(info.changes.length) : "";
 
     const { log } = await getJSON(`${API}/git/log?project=${encodeURIComponent(pid)}&n=40`);
+    if (refreshId !== state.gitRefresh) return;
     const logBox = $("#git-log");
     logBox.innerHTML = "";
     if (!log.length) logBox.appendChild(el("div", { class: "muted" }, t("no_history")));
@@ -2164,7 +2211,7 @@ async function refreshGitInfo() {
         el("button", { class: "btn small", type: "button", onclick: () => gitRestore(c) }, t("btn_restore"))));
     }
   } catch (e) {
-    setNodeStatus(status, errText(e), "error");
+    if (refreshId === state.gitRefresh) setNodeStatus(status, errText(e), "error");
   }
 }
 
@@ -2475,6 +2522,7 @@ async function init() {
   }
   setInterval(pollTabs, 700);
   pollTabs();
+  resumeExports();
 }
 
 init();

@@ -36,6 +36,7 @@ from .util import (
     looks_like_workflow,
     join_rel,
     normalize_rel,
+    reaches,
     safe_component,
     same_path,
     save_json,
@@ -178,17 +179,21 @@ def _validate_import(data):
         normalize_rel(l["workflow_ref"])
 
 
-def _forget_foreign_prefixes(data):
+def _forget_foreign_prefixes(data, merge=False):
     """Un prefijo traído de otra BD no puede apropiarse de una carpeta que ya existe aquí.
 
     Los archivos de esa carpeta no son del proyecto: se mezclarían con los suyos, y borrarlo los borraría.
     Se le asignará uno libre. Se conserva si ya era suyo en este equipo, o si todo lo que hay allí es igual
-    a su carpeta propia (restaurar una copia de la BD tras perder la original).
+    a su carpeta propia (restaurar una copia de la BD tras perder la original). Al fusionar, tampoco puede
+    solaparse con el de un proyecto que se queda: lo dejaría a él sin sus archivos.
     """
     current = {p.get("id"): p.get("prefix") for p in _read_db().get("projects", []) if isinstance(p, dict)}
     for p in data["projects"]:
         prefix = p.get("prefix")
         if not prefix or current.get(p["id"]) == prefix:
+            continue
+        if merge and any(pid != p["id"] and other and _overlaps(other, prefix) for pid, other in current.items()):
+            p["prefix"] = None
             continue
         try:
             if os.path.exists(workflows.abs_path(prefix)) and not _matches_own_folder(p, prefix):
@@ -211,7 +216,7 @@ def _matches_own_folder(p, prefix):
 def import_db(data, merge=False):
     """Reemplaza (o fusiona) la BD con `data`, tras validar su estructura."""
     _validate_import(data)
-    _forget_foreign_prefixes(data)
+    _forget_foreign_prefixes(data, merge)
     if not merge:
         data.setdefault("settings", {})
         _repair_folders(data)
@@ -244,9 +249,11 @@ def _check_folder(raw):
         raise UserError("folder_absolute", path=raw)
     folder = os.path.abspath(raw)
     # Ni la raíz del disco ni una carpeta que contenga a la de ComfyUI: el espejo no tendría sentido.
-    data = config.data_dir()
-    if os.path.dirname(folder) == folder or is_within(folder, workflows.get_root()) \
-            or is_within(folder, data) or is_within(data, folder):
+    data, root = config.data_dir(), workflows.get_root()
+    if os.path.dirname(folder) == folder or reaches(folder, root) or reaches(folder, data) or reaches(data, folder):
+        raise UserError("folder_forbidden", path=folder)
+    # Dentro de la de ComfyUI es válida, pero por su ruta normal: con otra no se sabría que es el mismo archivo.
+    if reaches(root, folder) and not is_within(root, folder):
         raise UserError("folder_forbidden", path=folder)
     return folder
 
@@ -266,7 +273,7 @@ def _check_folder_overlap(db, p, folder):
         other = o.get("folder")
         if o is p or not is_local_abs(other):
             continue
-        if is_within(other, folder) or is_within(folder, other):
+        if reaches(other, folder) or reaches(folder, other):
             raise UserError("folder_in_use", path=folder, project=o["name"])
 
 
@@ -316,9 +323,12 @@ def _valid_prefix(db, p, prefix):
 def _assign_prefix(db, p):
     """Elige la subcarpeta de ComfyUI donde viven los archivos de un proyecto con carpeta."""
     if _in_comfy(p["folder"]):
-        prefix = os.path.relpath(os.path.realpath(p["folder"]), os.path.realpath(workflows.get_root()))
+        try:
+            prefix = os.path.relpath(os.path.realpath(p["folder"]), os.path.realpath(workflows.get_root()))
+        except ValueError:      # otra unidad: la misma carpeta, a la que se ha llegado por otra ruta
+            raise UserError("folder_forbidden", path=p["folder"])
         prefix = prefix.replace(os.sep, "/")
-        if _prefix_conflict(db, p, prefix):
+        if prefix.startswith("../") or _prefix_conflict(db, p, prefix):
             raise UserError("folder_forbidden", path=p["folder"])
         return prefix
     base = safe_component(p.get("name"), "project")
@@ -389,6 +399,7 @@ def _migrate_legacy_root(db):
                 if not os.path.exists(dst):
                     copy_atomic(src, dst)
                 l["workflow_ref"] = new_ref
+        _nested_projects_to_links(db, project, legacy)
         return True
     except (OSError, UserError) as exc:
         log.warning("Custom workflows root not migrated yet: %s", exc)
@@ -396,6 +407,29 @@ def _migrate_legacy_root(db):
         db.clear()
         db.update(backup)
         return False
+
+
+def _nested_projects_to_links(db, parent, legacy):
+    """Un proyecto dentro de la raíz antigua no puede conservar su carpeta: se solaparía con el de la raíz.
+
+    Sigue mostrando sus workflows, como vínculos a los de la raíz, en vez de quedarse vacío.
+    """
+    root = workflows.get_root()
+    for p in db["projects"]:
+        folder = p.get("folder")
+        if p is parent or not is_local_abs(folder) or not os.path.isdir(folder) or not is_within(legacy, folder):
+            continue
+        base = os.path.relpath(os.path.realpath(folder), os.path.realpath(legacy)).replace(os.sep, "/")
+        base = "" if base == "." else base
+        for w in workflows.list_tree(root=folder)["workflows"]:
+            ref = join_rel(parent["prefix"], join_rel(base, w["rel"]))
+            dst = os.path.join(root, *ref.split("/"))
+            if not os.path.exists(dst):
+                copy_atomic(os.path.join(folder, *w["rel"].split("/")), dst)
+            if not any(l["project_id"] == p["id"] for l in _ref_links(db, ref)):
+                db["links"].append(_new_link(p["id"], ref, w["folder"]))
+        p["folder"] = None
+        p["prefix"] = None
 
 
 def _new_project(name, color=DEFAULT_COLOR, folder=None, notes="", subfolders=None, remote_url=""):
@@ -427,7 +461,14 @@ def _mirror_file(p, ref):
 
 
 # ----------------------------- proyectos -----------------------------
+def _check_texts(*values):
+    """Un valor de otro tipo se guardaría, y la propia copia de la BD dejaría de poder importarse."""
+    if any(v is not None and not isinstance(v, str) for v in values):
+        raise UserError("bad_name", name=next(v for v in values if v is not None and not isinstance(v, str)))
+
+
 def create_project(name, color=DEFAULT_COLOR, folder=None, notes="", subfolders=None):
+    _check_texts(name, color, folder, notes)
     name = (name or "").strip()
     if not name:
         raise UserError("project_name_required")
@@ -447,6 +488,7 @@ def create_project(name, color=DEFAULT_COLOR, folder=None, notes="", subfolders=
 
 def update_project(pid, name=None, color=None, notes=None, folder=None):
     """Actualiza un proyecto. `folder`: None = no tocar; "" = quitar la carpeta propia."""
+    _check_texts(name, color, notes, folder)
     db = load_db()
     p = _get(db, pid)
     if name is not None:
@@ -579,7 +621,8 @@ def _links_to_folder(db, p, new_folder):
                     workflows.write(new, _copy_bytes(db, old))
                     created.append(workflows.file_path(new))
                     if mirror:
-                        created.append(mirror)
+                        if not os.path.exists(mirror):
+                            created.append(mirror)
                         copy_atomic(workflows.file_path(new), mirror)
                 db["links"].remove(l)
                 continue
@@ -587,7 +630,8 @@ def _links_to_folder(db, p, new_folder):
                 workflows.relocate(old, new)
                 moved.append((old, new))
                 if mirror:
-                    created.append(mirror)
+                    if not os.path.exists(mirror):      # uno igual ya estaba allí: no es nuestro para borrarlo
+                        created.append(mirror)
                     copy_atomic(workflows.file_path(new), mirror)
             _rewrite_links(db, old, new)
             db["links"].remove(l)
@@ -701,6 +745,11 @@ def _move_project_folders(p, old, new):
         moves.append((general, join_rel(p["prefix"], new), None))
     for source, target, root in moves:
         workflows.check_folder_move(source, target, root)
+    # También contra la otra copia: la siguiente apertura mezclaría los archivos y uno pisaría al otro.
+    if fold_case(old) != fold_case(new):
+        targets = [(join_rel(p["prefix"], new), None)] + ([(new, p["folder"])] if _has_mirror(p) else [])
+        if any(os.path.exists(workflows.abs_path(target, root)) for target, root in targets):
+            raise UserError("exists", path=new)
     done = []
     try:
         for move in moves:
@@ -843,12 +892,17 @@ def _project_items(db, p):
         base = workflows.abs_path(prefix)
         if os.path.isdir(base):
             for w in workflows.list_tree(root=base)["workflows"]:
-                refs[w["rel"]] = w
+                refs[fold_case(w["rel"])] = w
         if _has_mirror(p) and os.path.isdir(p["folder"]):
             for w in workflows.list_tree(root=p["folder"])["workflows"]:
-                if w["rel"] not in refs or w["mtime"] > refs[w["rel"]]["mtime"]:
-                    refs[w["rel"]] = w
-        for ref, w in refs.items():
+                # `Foo.json` y `foo.json` son un solo archivo en Windows: manda el nombre de la copia de ComfyUI.
+                known = refs.get(fold_case(w["rel"]))
+                if not known:
+                    refs[fold_case(w["rel"])] = w
+                elif w["mtime"] > known["mtime"]:
+                    refs[fold_case(w["rel"])] = {**w, "rel": known["rel"], "name": known["name"], "folder": known["folder"]}
+        for w in refs.values():
+            ref = w["rel"]
             items.append({"path": join_rel(prefix, ref), "ref": ref, "name": w["name"], "folder": w["folder"],
                           "exists": True, "size": w["size"], "mtime": w["mtime"],
                           "shared": bool(_ref_links(db, join_rel(prefix, ref)))})
@@ -970,19 +1024,40 @@ def _keep_foreign_mirror(p, ref, source):
     """Conserva, con otro nombre, el archivo que ya hubiera en la carpeta del proyecto y sea distinto.
 
     Desde ComfyUI solo se ve su propia carpeta: guardar o renombrar con un nombre libre allí puede coincidir
-    con uno que solo está en la del proyecto, como lo traído por un `git pull` y aún sin abrir.
+    con uno que solo está en la del proyecto, como lo traído por un `git pull` y aún sin abrir. Devuelve el
+    nombre con el que se ha conservado, o None si no había nada que conservar.
     """
     if not _mirror_ready(p):
-        return
+        return None
     mirror = _mirror_file(p, ref)
     if not os.path.isfile(mirror) or _same_bytes(source, mirror):
-        return
+        return None
     base, ext = os.path.splitext(mirror)
     candidate, n = f"{base} (conflict){ext}", 1
     while os.path.exists(candidate):
         n += 1
         candidate = f"{base} (conflict {n}){ext}"
     os.replace(mirror, candidate)
+    return os.path.basename(candidate)
+
+
+def _mirror_changed_since(p, ref, previous, base=None):
+    """True si la copia del proyecto es posterior a la versión que conocía la pestaña que se ha guardado.
+
+    Es lo que pasa tras un `git pull` con la pestaña abierta. `previous` es la fecha del archivo según
+    ComfyUI, en segundos o en milisegundos según su versión. `base` es su contenido según la pestaña: si la
+    copia dice lo mismo, solo ha cambiado la fecha (cambiar de rama y volver, un disco de red con otro reloj).
+    """
+    if isinstance(previous, bool) or not isinstance(previous, (int, float)) or previous <= 0:
+        return False
+    mirror = _mirror_file(p, ref)
+    stat = _stat(mirror)
+    if not stat or stat[1] <= (previous / 1000 if previous > 1e11 else previous) + MTIME_SLACK:
+        return False
+    if isinstance(base, str):
+        with open(mirror, "rb") as fh:
+            return fh.read().decode("utf-8-sig", "replace") != base
+    return True
 
 
 def prepare_open(path):
@@ -996,30 +1071,42 @@ def prepare_open(path):
     return path
 
 
-def on_saved(path, created=False):
+def mirror_saved(path, created=False, previous=None, base=None):
     """ComfyUI acaba de guardar `path`: actualiza la copia en la carpeta del proyecto.
 
-    `created`: no existía en ComfyUI antes de este guardado.
+    `created`: no existía en ComfyUI antes de este guardado. `previous` y `base`: fecha y contenido del
+    archivo que conocía la pestaña. Devuelve (proyecto o None, nombre con el que se ha conservado otra
+    versión o None).
     """
     db = load_db()
     path = normalize_rel(path)
     p, ref = _owner_by_path(db, path)
     if not p or not _has_mirror(p):
-        return None
+        return None, None
     _require_mirror(p)
     if _case_clash(p, ref):
         raise UserError("exists", path=_mirror_file(p, ref))
     source = workflows.existing_file(path)
-    if created:
-        _keep_foreign_mirror(p, ref, source)
+    conflict = None
+    if created or _mirror_changed_since(p, ref, previous, base):
+        conflict = _keep_foreign_mirror(p, ref, source)
     copy_atomic(source, _mirror_file(p, ref))
-    return p["name"]
+    return p["name"], conflict
+
+
+def on_saved(path, created=False, previous=None):
+    return mirror_saved(path, created, previous)[0]
 
 
 def on_renamed(old, new):
     """ComfyUI acaba de renombrar/mover un archivo: reconcilia vínculos y copias de proyecto."""
     db = load_db()
     old, new = normalize_rel(old), normalize_rel(new)
+    if not old or not new:
+        raise UserError("missing_field", field="new" if old else "old")
+    # Si no está en el destino, no se ha movido: quitar la copia y los vínculos del origen los perdería.
+    if not workflows.exists(new):
+        raise UserError("not_found", path=new)
     # ComfyUI ya ha movido el archivo: aunque falle la copia del proyecto, los vínculos deben seguirlo.
     try:
         dst_p, dst_ref = _owner_by_path(db, new)
@@ -1063,6 +1150,11 @@ def _sync_mirrors_after_move(db, old, new):
             raise UserError("exists", path=dst_mirror)
         created = not os.path.exists(dst_mirror)
         copy_atomic(workflows.file_path(new), dst_mirror)
+    # Una pestaña abierta se mueve sin mirar la carpeta del proyecto: lo llegado allí después no se tira.
+    if src_mirror and workflows.exists(new) and not (dst_mirror and _same_file(src_mirror, dst_mirror)):
+        general, mirror = _stat(workflows.file_path(new)), _stat(src_mirror)
+        if mirror and mirror[1] > general[1] + MTIME_SLACK:
+            _keep_foreign_mirror(src_p, src_ref, workflows.file_path(new))
     # Renombrar solo mayúsculas sin copia previa: ahora son el mismo archivo y no hay nada que quitar.
     if src_mirror and os.path.isfile(src_mirror) and not (dst_mirror and _same_file(src_mirror, dst_mirror)):
         try:
@@ -1083,6 +1175,8 @@ def _same_file(a, b):
 
 def _move_file(db, old, new, general_moved):
     """Mueve un workflow y sus copias de proyecto. Si la carpeta del proyecto falla, lo deja como estaba."""
+    if general_moved and not workflows.exists(new):
+        raise UserError("not_found", path=new)
     if not general_moved:
         _ensure_general(db, old)
         workflows.relocate(old, new)
@@ -1257,6 +1351,10 @@ def add_to_project(path, pid, subfolder="", allow_multi=False, dry_run=False, ge
     if dry_run:
         return {"old": path, "new": path}
     links = _links_snapshot(db, path)
+    # Si ya vive en la carpeta de otro proyecto, sería compartirlo: como con los vínculos, se pregunta antes.
+    owner = _owner_by_path(db, path)[0]
+    if owner and not allow_multi and not any(l["project_id"] == pid for l in _ref_links(db, path)):
+        raise UserError("already_linked", file=os.path.basename(path), project=owner["name"])
     _link(db, p, path, normalize_rel(subfolder), allow_multi)
     save_db(db)
     return {"old": path, "new": path, "links": links}
@@ -1311,6 +1409,11 @@ def import_workflow(name, content, pid=None, folder=""):
         dest = "" if target else folder
     rel = join_rel(dest, name)
     _check_target_free(db, rel)
+    # Un vínculo de otro proyecto a un archivo desaparecido: se comprueba antes de crear nada.
+    if target and not target.get("folder"):
+        others = [l for l in _ref_links(db, rel) if l["project_id"] != target["id"]]
+        if others:
+            raise UserError("already_linked", file=name, project=_get(db, others[0]["project_id"])["name"])
     workflows.write(rel, content)
     on_saved(rel)
     if target and not target.get("folder"):

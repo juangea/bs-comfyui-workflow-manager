@@ -29,14 +29,16 @@
     to one project unless you choose to share the same file (edits then affect every project using it).
   - **with its own folder**, picked by browsing the ComfyUI server: its files live in
     `workflows/<project>` and in that folder. If the copies differ when you open a workflow, the newest
-    one is used (for example, after a `git pull`). If saving from ComfyUI would replace a different file
-    that was only in the project folder, that file is kept as `name (conflict).json`.
+    one is used (for example, after a `git pull`). If saving or renaming from ComfyUI would replace a
+    different file that reached the project folder without passing through that tab, that file is kept as
+    `name (conflict).json`.
 - **Stays in sync with ComfyUI** — renames and deletions made from ComfyUI's own panel also update projects.
 - **Export** — one workflow, a selection, a folder or a whole project, to a `.zip`.
 - **Git** (optional) — per project folder: create a repository, commit, set a remote or create a GitHub
   repository (with `gh`), push/pull, browse history and restore. A project folder can also be part of a
   shared studio repository. Git is disabled for folders that belong to ComfyUI or its repository. A file
   deleted by a `git pull` stays in ComfyUI's copy: delete it from the panel to remove it from the project.
+  As with Git itself, only use it on repositories you trust: a repository's own settings can run commands.
 
 ## Requirements
 
@@ -78,7 +80,8 @@ Use the **?** icon (top right, next to EN/ES) for in-app help.
 Projects and links are kept. ComfyUI's workflows folder is now always the main location:
 
 - If you had set a custom workflows root, it becomes a project with its own folder. Nothing in that
-  folder is moved or deleted.
+  folder is moved or deleted. A project whose folder was inside that root keeps its workflows, but they
+  become links to the new project's files, because project folders can't be nested.
 - Files of projects with their own folder are copied to `workflows/<project>` the first time you open them.
 - Git now works on a project's own folder. To keep using a repository, give the project that folder.
 - With `--multi-user`, each user has their own projects. Data from 1.0.x stays with the `default` user.

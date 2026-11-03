@@ -154,6 +154,33 @@ def is_within(root, candidate):
         return False
 
 
+def _same_folder(a, b):
+    """Misma carpeta según el sistema. Un disco que no da identificadores (0) no permite saberlo."""
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except (OSError, ValueError):
+        return False
+    return bool(sa.st_ino) and sa.st_ino == sb.st_ino and sa.st_dev == sb.st_dev
+
+
+def reaches(root, candidate):
+    """Como `is_within`, también si se llega a la misma carpeta por otra ruta.
+
+    Como `\\\\?\\C:\\x`, `\\\\localhost\\C$\\x` o un segundo montaje: comparar el texto no los reconoce. Hace una
+    consulta al disco por cada nivel: para validar, no para lo que se repite al pintar el árbol.
+    """
+    if is_within(root, candidate):
+        return True
+    path = os.path.realpath(candidate)
+    while True:
+        if _same_folder(path, root):
+            return True
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+
+
 def is_link(path):
     """True si la propia carpeta es un enlace simbólico o una unión de Windows."""
     parent, name = os.path.split(os.path.abspath(path))
