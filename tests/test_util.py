@@ -4,19 +4,27 @@
 import os
 
 from bswm.util import (
+    UserError,
     ensure_json_ext,
-    human_size,
     is_workflow_file,
     normalize_rel,
+    safe_component,
     safe_join,
-    slugify,
 )
 
 
-def test_human_size():
-    assert human_size(0) == "0 B"
-    assert human_size(1536).startswith("1.5")
-    assert "MB" in human_size(5_000_000)
+def _raises(fn, *args):
+    try:
+        fn(*args)
+    except ValueError:
+        return True
+    raise AssertionError(f"no rechazó {args!r}")
+
+
+def test_user_error_has_code_and_message():
+    err = UserError("exists", path="a.json")
+    assert err.code == "exists" and err.params == {"path": "a.json"}
+    assert "a.json" in str(err)
 
 
 def test_is_workflow_file():
@@ -25,34 +33,27 @@ def test_is_workflow_file():
     assert not is_workflow_file(".index.json")
     assert not is_workflow_file(".hidden.json")
     assert not is_workflow_file("notes.txt")
+    assert not is_workflow_file("id_rsa")
 
 
 def test_ensure_json_ext():
     assert ensure_json_ext("foo") == "foo.json"
     assert ensure_json_ext("foo.json") == "foo.json"
     assert ensure_json_ext("foo.JSON") == "foo.JSON"
-    for bad in ["", "a/b", "a\\b"]:
-        try:
-            ensure_json_ext(bad)
-            raise AssertionError(f"no rechazó {bad!r}")
-        except ValueError:
-            pass
+    for bad in ["", "a/b", "a\\b", ".."]:
+        _raises(ensure_json_ext, bad)
 
 
 def test_normalize_rel():
-    assert normalize_rel("a\\b/c") == "a/b/c"
     assert normalize_rel("/a//b/./c/") == "a/b/c"
     for bad in ["../x", "a/../../b"]:
-        try:
-            normalize_rel(bad)
-            raise AssertionError(f"no rechazó {bad!r}")
-        except ValueError:
-            pass
+        _raises(normalize_rel, bad)
 
 
-def test_slugify():
-    assert slugify("Pepe López!") == "Pepe-L-pez"
-    assert slugify("  ") == "item"
+def test_safe_component():
+    assert safe_component('Pepe: "López"/v1') == "Pepe- -López-v1"
+    assert safe_component("  ...  ") == "item"
+    assert safe_component("Jacarandas") == "Jacarandas"
 
 
 def test_safe_join_ok():
@@ -65,18 +66,9 @@ def test_safe_join_ok():
 def test_safe_join_blocks_traversal():
     root = os.path.abspath(".")
     for bad in ["../x", os.path.join("..", "..", "y"), "sub/../../z"]:
-        try:
-            safe_join(root, bad)
-            raise AssertionError(f"no bloqueó: {bad!r}")
-        except ValueError:
-            pass
+        _raises(safe_join, root, bad)
 
 
 def test_safe_join_blocks_absolute():
     root = os.path.abspath(".")
-    abs_part = os.path.abspath(os.sep + "etc")
-    try:
-        safe_join(root, abs_part)
-        raise AssertionError("no bloqueó ruta absoluta")
-    except ValueError:
-        pass
+    _raises(safe_join, root, os.path.abspath(os.sep + "etc"))

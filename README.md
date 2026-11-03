@@ -1,70 +1,93 @@
 # Bone-Studio Workflow Manager — for ComfyUI
 
-> **EN** · Organize your ComfyUI workflows for production: a folder manager **plus** a project layer
-> (an exportable internal database), bulk **export** and optional **Git** versioning — all from a
-> built-in panel that lives in its own iframe (Nodes 2.0 proof).
+> **EN** · Keep your production workflows organized: projects and folders in one tree, next to the
+> canvas. Saves go to ComfyUI's workflows folder and, for projects with their own folder, to that folder
+> too. Bulk export and optional Git versioning included. It runs in its own iframe (Nodes 2.0 proof).
 >
-> **ES** · Organiza tus workflows de ComfyUI para producción: un gestor de carpetas **más** una capa
-> de proyectos (base de datos interna exportable), **exportación** masiva y **versionado Git**
-> opcional — desde un panel propio dentro de un iframe (a prueba de Nodes 2.0).
+> **ES** · Mantén organizados tus workflows de producción: proyectos y carpetas en un solo árbol, junto
+> al lienzo. Se guardan en la carpeta de workflows de ComfyUI y, en proyectos con carpeta propia, también
+> en esa carpeta. Incluye exportación masiva y versionado Git opcional. Funciona en su propio iframe
+> (a prueba de Nodes 2.0).
 
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-AC1F23.svg)
 &nbsp;·&nbsp; Bilingual EN/ES &nbsp;·&nbsp; Python 3.10–3.13 &nbsp;·&nbsp; stdlib only
 
 ---
 
-## Why / Por qué
-
-Production studios end up with hundreds of workflows in one monolithic, unusable list. This tool
-gives them structure two complementary ways, without changing how ComfyUI itself works.
-
 ## Features
 
-- **General** — a folder manager over your ComfyUI workflows folder (configurable). **Open** a
-  workflow in the canvas, **rename**, **move** between folders, **duplicate**, **delete**, **export**,
-  or **add it to a project**. Multi-term search; tick rows and **Export selected** to a `.zip`.
-- **Projects** — your own organization layer (an exportable internal JSON database) that links
-  workflows to **projects** and **subfolders** (e.g. *pepe* → *imagen* / *video*), independent of where
-  files live on disk. Each project is either:
-  - **virtual** — tags only; the file stays in the general folder. By default a workflow belongs to
-    **one** project; you can opt into linking the **same** file to several projects (it warns you, since
-    edits propagate). **Duplicate** makes an independent copy.
-  - **folder-backed** — its workflows physically live in a folder you choose; moving/renaming are real
-    file operations.
-- **Export** — single, bulk selection, a whole project, or a whole folder → `.zip`, built in the
-  background.
-- **Git** (optional) — pick a repository (the **studio** root or a project's folder) and **init**,
-  **commit**, set a **remote** or **create a GitHub repo** (via `gh`), **push/pull** and browse
-  **history**. Chosen per project: studio repo, dedicated repo, local-only, or none.
-- **Own UI** in an iframe (doesn't use the node graph) → won't break with **Nodes 2.0**. **Bilingual
-  EN/ES** with in-app help.
+- **One tree** — projects and your regular workflows side by side, with search, multi-select,
+  drag & drop and right-click menus.
+- **Tab-aware opening** — click a workflow to open it. If it already has a tab, you go to that tab and
+  keep any unsaved changes. Dots in the tree mark open tabs and unsaved changes.
+- **Saving that just works** — every save writes to ComfyUI's workflows folder. If the workflow belongs
+  to a project with its own folder, a copy is written there too. This works the same with the panel's
+  **Save**, the **Save** button in the top bar, **File > Save** and `Ctrl+S`. **File > Save to Project…**
+  saves the current workflow into a project.
+- **Projects** — group workflows with subfolders. A project can be:
+  - **without its own folder**: it only groups them, and the files stay where they are. A workflow belongs
+    to one project unless you choose to share the same file (edits then affect every project using it).
+  - **with its own folder**, picked by browsing the ComfyUI server: its files live in
+    `workflows/<project>` and in that folder. If the copies differ when you open a workflow, the newest
+    one is used (for example, after a `git pull`). If saving from ComfyUI would replace a different file
+    that was only in the project folder, that file is kept as `name (conflict).json`.
+- **Stays in sync with ComfyUI** — renames and deletions made from ComfyUI's own panel also update projects.
+- **Export** — one workflow, a selection, a folder or a whole project, to a `.zip`.
+- **Git** (optional) — per project folder: create a repository, commit, set a remote or create a GitHub
+  repository (with `gh`), push/pull, browse history and restore. A project folder can also be part of a
+  shared studio repository. Git is disabled for folders that belong to ComfyUI or its repository. A file
+  deleted by a `git pull` stays in ComfyUI's copy: delete it from the panel to remove it from the project.
 
 ## Requirements
 
-- ComfyUI (provides `aiohttp` and the PromptServer). **No `pip install`** needed — stdlib only.
-- **Git features** require `git` (and optionally `gh` for GitHub) installed on the system. If they
-  aren't present, the Git options are disabled. **We never install them.**
+- ComfyUI (provides `aiohttp` and the PromptServer). **No `pip install`** needed: stdlib only.
+- **Git features** need `git` on the ComfyUI server (and optionally `gh` for GitHub). Without them, Git
+  options are disabled. **We never install them.**
 
 ## Install
 
-**Manual:** copy this folder into `ComfyUI/custom_nodes/` and restart ComfyUI. Open the **BS Workflows**
-tab in the sidebar.
+**From ComfyUI-Manager (recommended):** search for **"Bone-Studio Workflow Manager"**, install and restart.
 
-**From ComfyUI-Manager:** search **"Bone-Studio Workflow Manager"** → Install → restart.
+**Manual:** copy this folder into `ComfyUI/custom_nodes/` and restart ComfyUI. Open the **BS-WM** tab in
+the sidebar.
 
 ## Usage
 
-1. **General** — browse/search; *Open* loads a workflow in the canvas. Rename / Move / Duplicate /
-   Delete / Export per row, or tick several and *Export selected*. *Add to project* links it.
-2. **Projects** — *New* a project (virtual or folder-backed, pick a Git mode). Add workflows from the
-   General tab, organize into subfolders, *Move* between projects/subfolders, *Duplicate* into another
-   project, *Export* the project.
-3. **Git** — pick the repository, *Init*, write a message and *Commit*, set a *Remote* or *Create on
-   GitHub*, *Push/Pull*, review *History*.
-4. **Settings** — change the workflows root (empty = ComfyUI default) and export/import the projects
-   database.
+- **Open:** click a workflow. Ctrl/⌘-click and Shift-click select several.
+- **Drag and drop:** a tip shows what will happen while you drag. Drop on a folder, a project or any
+  workflow in the place you want.
+  - **No key:** moves between folders of the same project, or adds a workflow from *Workflows* to a project.
+  - **Ctrl/⌘:** also adds it to another project, and it stays in the first one. Between two projects
+    with their own folder, the second one gets a copy.
+  - **Shift:** moves it to another project and takes it out of the first one, or takes it out of the
+    project if you drop it on *Workflows*.
+- **Open by dragging:** drop workflows on the canvas to open them.
+- **Undo:** after a move, use **Undo** in the status line or `Ctrl+Z`.
+- **Own folders:** each project needs its own; two projects can't share a folder or be nested.
+- **Keyboard:** `↑` `↓` move through the list, `Enter` opens, `F2` renames, `Del` deletes.
+- **New project:** the **+** next to *Projects*, or drop workflows on that heading. Choosing its own
+  folder is optional.
+- **Import:** drag `.json` files from your computer onto the tree, or right-click a folder or project.
+- **Save:** use any of the save options above. The bar at the top of the panel shows where the active
+  workflow will be saved.
 
-Use the **?** icon (top-right, next to EN/ES) for in-app help.
+Use the **?** icon (top right, next to EN/ES) for in-app help.
+
+## Upgrading from 1.0.x
+
+Projects and links are kept. ComfyUI's workflows folder is now always the main location:
+
+- If you had set a custom workflows root, it becomes a project with its own folder. Nothing in that
+  folder is moved or deleted.
+- Files of projects with their own folder are copied to `workflows/<project>` the first time you open them.
+- Git now works on a project's own folder. To keep using a repository, give the project that folder.
+- With `--multi-user`, each user has their own projects. Data from 1.0.x stays with the `default` user.
+
+## Security note
+
+ComfyUI has no login of its own, and this tool can list server folders and change workflow files. If you
+start ComfyUI with `--listen`, anyone who can reach it on the network can use this panel, as with the rest
+of ComfyUI. File operations are limited to workflow `.json` files, and Git remotes to normal transports.
 
 ---
 

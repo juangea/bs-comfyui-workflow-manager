@@ -11,6 +11,14 @@ def _wf(extra=None):
     return json.dumps({"nodes": [], **(extra or {})})
 
 
+def _raises(fn, *args, **kw):
+    try:
+        fn(*args, **kw)
+    except ValueError:
+        return True
+    raise AssertionError(f"debería fallar: {args!r}")
+
+
 def test_write_and_list():
     fresh_env()
     from bswm import workflows as wf
@@ -18,8 +26,7 @@ def test_write_and_list():
     wf.mkdir("clientes/pepe")
     wf.write("clientes/pepe/b.json", _wf())
     tree = wf.list_tree()
-    rels = sorted(w["rel"] for w in tree["workflows"])
-    assert rels == ["a.json", "clientes/pepe/b.json"]
+    assert sorted(w["rel"] for w in tree["workflows"]) == ["a.json", "clientes/pepe/b.json"]
     assert "clientes/pepe" in tree["folders"]
 
 
@@ -27,79 +34,61 @@ def test_write_no_overwrite():
     fresh_env()
     from bswm import workflows as wf
     wf.write("a.json", _wf())
-    try:
-        wf.write("a.json", _wf())
-        raise AssertionError("debería rechazar sobrescritura")
-    except ValueError:
-        pass
-    wf.write("a.json", _wf({"v": 2}), overwrite=True)  # ok
+    _raises(wf.write, "a.json", _wf())
+    wf.write("a.json", _wf({"v": 2}), overwrite=True)
 
 
-def test_rename_move_duplicate_delete():
+def test_relocate_collision():
     fresh_env()
     from bswm import workflows as wf
     wf.write("a.json", _wf())
-    new = wf.rename("a.json", "renamed")
-    assert new == "renamed.json"
-    dup = wf.duplicate("renamed.json")
-    assert dup == "renamed copy.json"
-    wf.mkdir("dest")
-    moved = wf.move(dup, "dest")
-    assert moved == "dest/renamed copy.json"
-    assert wf.exists("dest/renamed copy.json")
-    wf.delete("dest/renamed copy.json")
-    assert not wf.exists("dest/renamed copy.json")
-
-
-def test_move_collision():
-    fresh_env()
-    from bswm import workflows as wf
-    wf.write("a.json", _wf())
-    wf.mkdir("dest")
     wf.write("dest/a.json", _wf())
-    try:
-        wf.move("a.json", "dest")
-        raise AssertionError("debería rechazar colisión")
-    except ValueError:
-        pass
+    _raises(wf.relocate, "a.json", "dest/a.json")
+    wf.relocate("a.json", "dest/b.json")
+    assert wf.exists("dest/b.json") and not wf.exists("a.json")
 
 
 def test_safe_against_traversal():
     fresh_env()
     from bswm import workflows as wf
     for bad in ["../escape.json", "..\\..\\escape.json"]:
-        try:
-            wf.write(bad, _wf())
-            raise AssertionError(f"no bloqueó {bad!r}")
-        except ValueError:
-            pass
+        _raises(wf.write, bad, _wf())
 
 
-def test_rename_folder():
-    fresh_env()
-    from bswm import workflows as wf
-    wf.mkdir("clientes/pepe")
-    wf.write("clientes/pepe/a.json", _wf())
-    new = wf.rename_folder("clientes/pepe", "jose")
-    assert new == "clientes/jose"
-    assert wf.exists("clientes/jose/a.json")
-    assert not wf.exists("clientes/pepe/a.json")
-
-
-def test_transfer_from():
+def test_only_workflow_files_can_be_touched():
     base = fresh_env()
     from bswm import workflows as wf
-    # carpeta "ComfyUI" simulada como origen externo
-    src = os.path.join(base, "comfy_src")
-    os.makedirs(os.path.join(src, "video"), exist_ok=True)
-    for rel in ["solo.json", "video/clip.json"]:
-        p = os.path.join(src, *rel.split("/"))
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w") as fh:
-            fh.write(_wf())
-    res = wf.transfer_from(src, ["solo.json", "video/clip.json"], dest_folder="importados")
-    assert sorted(res["copied"]) == ["importados/solo.json", "importados/video/clip.json"]
-    assert wf.exists("importados/video/clip.json")
-    # repetir: ahora se omiten (ya existen)
-    res2 = wf.transfer_from(src, ["solo.json"], dest_folder="importados")
-    assert res2["copied"] == [] and len(res2["skipped"]) == 1
+    root = wf.get_root()
+    secret = os.path.join(root, "secret.txt")
+    with open(secret, "w") as fh:
+        fh.write("x")
+    _raises(wf.read_bytes, "secret.txt")
+    _raises(wf.remove_file, "secret.txt")
+    _raises(wf.relocate, "secret.txt", "moved.json")
+    assert os.path.isfile(secret)
+
+
+def test_move_folder():
+    fresh_env()
+    from bswm import workflows as wf
+    wf.write("clientes/pepe/a.json", _wf())
+    assert wf.move_folder("clientes/pepe", "clientes/jose") == "clientes/jose"
+    assert wf.exists("clientes/jose/a.json") and not wf.exists("clientes/pepe/a.json")
+    _raises(wf.move_folder, "clientes", "clientes/dentro")
+    _raises(wf.move_folder, "", "x")
+
+
+def test_delete_workflows_in_keeps_other_files():
+    fresh_env()
+    from bswm import workflows as wf
+    root = wf.get_root()
+    wf.write("carpeta/a.json", _wf())
+    wf.write("carpeta/vacia/b.json", _wf())
+    other = os.path.join(root, "carpeta", "render.png")
+    with open(other, "w") as fh:
+        fh.write("x")
+    removed, gone = wf.delete_workflows_in("carpeta")
+    assert sorted(removed) == ["carpeta/a.json", "carpeta/vacia/b.json"]
+    assert gone is False
+    assert os.path.isfile(other)
+    assert not os.path.exists(os.path.join(root, "carpeta", "vacia"))

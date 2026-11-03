@@ -4,13 +4,12 @@
 
 Gestor de workflows para producción, en una interfaz propia (pestaña en la barra lateral, dentro
 de un iframe servido por este mismo add-on, para no depender del sistema de nodos y sobrevivir a
-Nodes 2.0). Dos formas de organizar los mismos workflows:
+Nodes 2.0). Un solo árbol con dos secciones sobre la carpeta de workflows de ComfyUI:
 
-  1. General  — explorador de carpetas sobre la carpeta de workflows de ComfyUI (configurable):
-                abrir, mover, renombrar, duplicar, borrar, exportar.
-  2. Proyectos — capa propia (base de datos interna exportable) que vincula workflows a proyectos
-                y subcarpetas, independiente de su ubicación en disco. Opción de carpeta vinculada
-                por proyecto y versionado Git (local o con remoto / GitHub vía `gh`).
+  1. Workflows — explorador de carpetas: abrir, mover, renombrar, duplicar, borrar, exportar.
+  2. Proyectos — capa propia (base de datos interna exportable) que agrupa workflows en proyectos
+                y subcarpetas. Un proyecto puede tener carpeta propia, que recibe una copia de cada
+                guardado y admite versionado Git (local o con remoto / GitHub vía `gh`).
 
 Instalación: copia esta carpeta en ComfyUI/custom_nodes/ y reinicia ComfyUI. Solo stdlib;
 las funciones Git usan el `git`/`gh` del sistema si están instalados (nunca los instalamos).

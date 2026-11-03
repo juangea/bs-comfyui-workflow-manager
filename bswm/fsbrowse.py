@@ -10,6 +10,8 @@ resto del add-on (el usuario local de ComfyUI ya puede fijar rutas absolutas).
 import os
 import string
 
+from .util import UserError, reserved_name, usable_name
+
 
 def _is_writable(path):
     """Best-effort: ¿se puede escribir en `path`?"""
@@ -45,7 +47,7 @@ def list_dir(path):
 
     abspath = os.path.abspath(path)
     if not os.path.isdir(abspath):
-        raise ValueError(f"No es una carpeta del servidor: {abspath}")
+        raise UserError("folder_not_found", path=abspath)
 
     dirs = []
     try:
@@ -59,9 +61,9 @@ def list_dir(path):
             except OSError:
                 continue  # enlaces rotos / sin permiso: se omiten
     except PermissionError:
-        raise ValueError(f"Sin permiso para listar: {abspath}")
+        raise UserError("folder_unusable", detail=abspath)
     except OSError as exc:
-        raise ValueError(f"No se pudo listar: {exc}")
+        raise UserError("folder_unusable", detail=exc)
 
     parent = os.path.dirname(abspath)
     if parent == abspath:
@@ -76,11 +78,11 @@ def mkdir(path, name):
     name = (name or "").strip()
     base = os.path.abspath(path) if path else ""
     if not base or not os.path.isdir(base):
-        raise ValueError("Carpeta base no válida.")
-    if not name or "/" in name or "\\" in name or name in (".", ".."):
-        raise ValueError(f"Nombre de carpeta no válido: {name!r}")
+        raise UserError("folder_not_found", path=path)
+    if not name or "/" in name or "\\" in name or name in (".", "..") or not usable_name(name) or reserved_name(name):
+        raise UserError("bad_name", name=name)
     full = os.path.join(base, name)
     if os.path.exists(full):
-        raise ValueError(f"Ya existe: {full}")
+        raise UserError("exists", path=full)
     os.makedirs(full)
     return full

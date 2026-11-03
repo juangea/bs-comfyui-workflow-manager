@@ -2,41 +2,84 @@
 # Copyright (C) 2026 Enob-Studio S.L. and Juan Gea
 """Integración Git opcional: detección de `git`/`gh` y operaciones en segundo plano.
 
-Espejo del patrón de `downloads.py` del model-manager: las operaciones que pueden tardar (commit,
-push, pull, clone, restore, crear repo en GitHub) se ejecutan como *jobs* en un hilo worker y su
-estado se consulta por polling. Las lecturas rápidas (status, log, info) son síncronas.
+Espejo del patrón de `downloads.py` del model-manager: las operaciones que pueden tardar se ejecutan
+como *jobs* en un hilo worker y su estado se consulta por polling. Las lecturas son síncronas.
 
-NUNCA instalamos git ni gh: solo invocamos los del sistema vía subprocess. Si no están, la UI
-deshabilita estas funciones.
+NUNCA instalamos git ni gh: solo invocamos los del sistema vía subprocess, siempre con lista de
+argumentos (sin shell). Todo valor que llega de la red se valida antes de pasarlo a git: los remotos
+se limitan a protocolos de transporte normales (git admite otros, como `ext::`, que ejecutan comandos).
 """
 import os
+import re
+import signal
 import subprocess
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
+
+from .util import UserError, is_within, same_path
 
 GIT = "git"
 GH = "gh"
+_DETECT_TTL = 60
+
+_ENV = {
+    "GIT_TERMINAL_PROMPT": "0",            # sin credenciales guardadas: falla, no se queda esperando
+    "GIT_ALLOW_PROTOCOL": "https:http:ssh:git:file",
+    "GH_PROMPT_DISABLED": "1",
+    "LC_ALL": "C",                         # mensajes en inglés: hay que poder reconocerlos
+}
+_REMOTE_OK = re.compile(
+    r"^(?:(?:https?|ssh|git|file)://[^\s]+"     # URL con esquema
+    r"|[\w.-]+@[\w.-]+:[^\s]+"                  # git@host:ruta
+    r"|/[^\s]*"                                 # ruta absoluta POSIX
+    r"|[A-Za-z]:[\\/][^\s]*"                    # ruta absoluta Windows
+    r"|\\\\[^\s]+)$"                            # recurso de red Windows
+)
+_COMMIT_OK = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_REPO_NAME_OK = re.compile(r"^[\w][\w.-]*(/[\w][\w.-]*)?$")
 
 
 # ----------------------------- subprocess helpers -----------------------------
-def _run(args, cwd=None, timeout=180, input_text=None):
+def _run(args, cwd=None, timeout=180):
     """Ejecuta un comando y devuelve (rc, stdout, stderr). rc=-1 si no existe el ejecutable."""
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    else:
+        # Sin terminal: ssh no puede quedarse pidiendo la clave en la consola donde corre ComfyUI.
+        kwargs["start_new_session"] = True
     try:
-        proc = subprocess.run(
-            args, cwd=cwd, input=input_text, timeout=timeout,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        proc = subprocess.Popen(
+            args, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", env={**os.environ, **_ENV}, **kwargs,
         )
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
-    except FileNotFoundError:
-        return -1, "", f"No se encontró el ejecutable: {args[0]}"
+    except OSError:
+        return -1, "", f"Executable not found: {args[0]}"
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out or "", err or ""
     except subprocess.TimeoutExpired:
-        return -2, "", f"Tiempo de espera agotado: {' '.join(args)}"
+        _kill(proc)
+        return -2, "", f"Timed out: {args[0]} {args[1] if len(args) > 1 else ''}"
+
+
+def _kill(proc):
+    """Termina el comando y sus hijos (ssh): si no, sus tuberías seguirían abiertas y esto no acabaría."""
+    try:
+        if os.name == "nt":
+            proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _git(repo, *args, **kw):
-    return _run([GIT, "-C", repo, *args], **kw)
+    # core.fsmonitor puede ejecutar un comando definido en la config del repo: lo desactivamos.
+    # core.quotepath: sin esto, "café.json" se listaría como "caf\\303\\251.json".
+    return _run([GIT, "-c", "core.fsmonitor=false", "-c", "core.quotepath=false", "-C", repo, *args], **kw)
 
 
 def _first_line(text):
@@ -44,79 +87,94 @@ def _first_line(text):
 
 
 # ----------------------------- detección -----------------------------
-def detect():
-    """Devuelve disponibilidad y versiones de git y gh (+ si gh está autenticado)."""
-    rc, out, _ = _run([GIT, "--version"])
-    git_version = _first_line(out).replace("git version ", "") if rc == 0 else None
+_detect_cache = (0.0, None)
 
-    rc, out, _ = _run([GH, "--version"])
+
+def detect():
+    """Disponibilidad y versiones de git y gh (+ si gh está autenticado). Cacheado 60 s."""
+    global _detect_cache
+    stamp, cached = _detect_cache
+    if cached and time.time() - stamp < _DETECT_TTL:
+        return cached
+    rc, out, _ = _run([GIT, "--version"], timeout=15)
+    git_version = _first_line(out).replace("git version ", "") if rc == 0 else None
+    rc, out, _ = _run([GH, "--version"], timeout=15)
     gh_version = _first_line(out).replace("gh version ", "") if rc == 0 else None
     gh_authed = None
     if gh_version is not None:
-        rc, _, _ = _run([GH, "auth", "status"])
+        rc, _, _ = _run([GH, "auth", "status"], timeout=15)
         gh_authed = rc == 0
-
-    return {
+    result = {
         "git": {"available": git_version is not None, "version": git_version},
         "gh": {"available": gh_version is not None, "version": gh_version, "authed": gh_authed},
     }
+    _detect_cache = (time.time(), result)
+    return result
 
 
 # ----------------------------- lecturas síncronas -----------------------------
-def _toplevel(repo):
-    """Raíz del repositorio Git que contiene `repo` (o None si no hay ninguno)."""
-    rc, out, _ = _git(repo, "rev-parse", "--show-toplevel")
+def _toplevel(folder):
+    """Raíz del repositorio Git que contiene `folder` (o None si no hay ninguno)."""
+    if not folder or not os.path.isdir(folder):
+        return None
+    rc, out, _ = _git(folder, "rev-parse", "--show-toplevel")
     if rc == 0 and out.strip():
         return os.path.abspath(out.strip())
     return None
 
 
-def _samepath(a, b):
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+def _repo_error(folder):
+    """Motivo por el que git no puede usar la carpeta, aparte de no ser un repositorio.
 
-
-def is_repo(repo):
-    """True solo si `repo` es la RAÍZ de un repositorio Git (no si cuelga de uno ajeno)."""
-    if not repo or not os.path.isdir(repo):
-        return False
-    top = _toplevel(repo)
-    return bool(top and _samepath(top, repo))
-
-
-def is_foreign(repo):
-    """True si `repo` está DENTRO de un repo Git cuya raíz está por encima (p.ej. el de ComfyUI)."""
-    if not repo or not os.path.isdir(repo):
-        return False
-    top = _toplevel(repo)
-    return bool(top and not _samepath(top, repo))
-
-
-def info(repo):
-    """Resumen del repo. Distingue tres estados:
-      - no es repo (se puede `init`),
-      - es NUESTRO repo (su raíz coincide con `repo`),
-      - es AJENO (`foreign`): `repo` cuelga de un repo cuya raíz está por encima (ComfyUI) → Git bloqueado.
+    Típico en Linux: una carpeta de otro usuario da "dubious ownership". Lo decide quien administra
+    el equipo (`safe.directory`), así que se explica en vez de ofrecer crear un repositorio.
     """
-    out = {"repo": repo, "is_repo": False, "foreign": False, "toplevel": None,
-           "branch": None, "remote": None, "remote_url": None,
-           "changes": 0, "changes_list": [], "ahead": 0, "behind": 0}
-    top = _toplevel(repo)
+    rc, _, err = _git(folder, "rev-parse", "--show-toplevel")
+    if rc in (0, -1) or "not a git repository" in err:
+        return None
+    return err.strip()
+
+
+def is_blocked(folder, protected):
+    """True si operar aquí podría tocar el repo de ComfyUI o su propia carpeta de workflows.
+
+    `protected`: una carpeta o varias. Si git no puede decir a qué repositorio pertenece la carpeta,
+    tampoco se puede asegurar que no sea el de ComfyUI.
+    """
+    roots = [r for r in ([protected] if isinstance(protected, str) else protected) if r]
+    if any(is_within(root, folder) for root in roots):
+        return True
+    if os.path.isdir(folder) and _repo_error(folder):
+        return True
+    top = _toplevel(folder)
+    return bool(top and any(is_within(top, root) for root in roots))
+
+
+def info(folder, protected):
+    """Resumen del repo de un proyecto. `blocked`: comparte repo/carpeta con ComfyUI."""
+    out = {"folder": folder, "exists": os.path.isdir(folder), "is_repo": False, "blocked": False,
+           "toplevel": None, "shared_repo": False, "branch": None, "remote_url": None,
+           "changes": [], "ahead": 0, "behind": 0, "error": None}
+    if not out["exists"]:
+        return out
+    out["error"] = _repo_error(folder)
+    if out["error"]:
+        return out
+    out["blocked"] = is_blocked(folder, protected)
+    top = _toplevel(folder)
     out["toplevel"] = top
-    if top is None:
-        return out  # no es repo: se puede inicializar
-    if not _samepath(top, repo):
-        out["foreign"] = True
-        return out  # repo ajeno (ComfyUI u otro): no tocamos nada
+    if out["blocked"] or top is None:
+        return out
     out["is_repo"] = True
-    rc, br, _ = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    out["shared_repo"] = not same_path(top, folder)   # p. ej. un repo general de estudio
+    # symbolic-ref también funciona en un repositorio recién creado, todavía sin commits.
+    rc, br, _ = _git(folder, "symbolic-ref", "--short", "-q", "HEAD")
     out["branch"] = br.strip() if rc == 0 else None
-    rc, url, _ = _git(repo, "remote", "get-url", "origin")
+    rc, url, _ = _git(folder, "remote", "get-url", "origin")
     if rc == 0 and url.strip():
-        out["remote"] = "origin"
         out["remote_url"] = url.strip()
-    out["changes_list"] = status(repo)
-    out["changes"] = len(out["changes_list"])
-    rc, ab, _ = _git(repo, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+    out["changes"] = status(folder)
+    rc, ab, _ = _git(folder, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
     if rc == 0 and ab.strip():
         try:
             behind, ahead = ab.split()
@@ -126,28 +184,23 @@ def info(repo):
     return out
 
 
-def status(repo):
-    """Lista de cambios pendientes: [{code, path}] (porcelain v1)."""
-    rc, out, _ = _git(repo, "status", "--porcelain=v1")
+def status(folder):
+    """Cambios pendientes dentro de `folder`: [{code, path}] (porcelain v1)."""
+    rc, out, _ = _git(folder, "status", "--porcelain=v1", "--", ".")
     if rc != 0:
         return []
     items = []
     for line in out.splitlines():
-        if not line.strip():
-            continue
-        code, _, path = line[:2], line[2], line[3:]
-        items.append({"code": code.strip() or code, "path": path.strip().strip('"')})
+        if line.strip():
+            items.append({"code": line[:2].strip(), "path": line[3:].strip().strip('"')})
     return items
 
 
-def log(repo, n=50, path=None):
-    """Historial: [{hash, short, author, date(ts), subject}]."""
+def log(folder, n=50):
+    """Historial de `folder`: [{hash, short, author, date(ts), subject}]."""
     sep = "\x1f"
     fmt = sep.join(["%H", "%h", "%an", "%at", "%s"])
-    args = ["log", f"-n{int(n)}", f"--pretty=format:{fmt}"]
-    if path:
-        args += ["--", path]
-    rc, out, _ = _git(repo, *args)
+    rc, out, _ = _git(folder, "log", f"-n{max(1, min(int(n), 500))}", f"--pretty=format:{fmt}", "--", ".")
     if rc != 0:
         return []
     rows = []
@@ -159,48 +212,66 @@ def log(repo, n=50, path=None):
     return rows
 
 
+def validate_remote(url):
+    url = (url or "").strip()
+    if not url or url.startswith("-") or "::" in url or not _REMOTE_OK.match(url):
+        raise UserError("git_bad_url", url=url)
+    return url
+
+
 # ----------------------------- jobs (operaciones de escritura) -----------------------------
 class _Job:
-    __slots__ = ("id", "kind", "repo", "label", "state", "log", "error", "created")
+    __slots__ = ("id", "kind", "repo", "owner", "state", "log", "error", "created")
 
-    def __init__(self, jid, kind, repo, label):
+    def __init__(self, jid, kind, repo, owner=None):
         self.id = jid
+        self.owner = owner
         self.kind = kind
         self.repo = repo
-        self.label = label
         self.state = "queued"   # queued | running | done | error
         self.log = ""
         self.error = ""
         self.created = time.time()
 
     def to_dict(self):
-        return {"id": self.id, "kind": self.kind, "repo": self.repo, "label": self.label,
+        return {"id": self.id, "kind": self.kind, "repo": self.repo,
                 "state": self.state, "log": self.log, "error": self.error, "created": self.created}
 
 
 class GitManager:
+    KINDS = ("init", "commit", "remote", "push", "pull", "restore", "gh_create")
+
     def __init__(self):
         self._jobs = {}
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bs-git")
         self._counter = 0
 
-    def enqueue(self, kind, repo, label="", **opts):
+    def enqueue(self, kind, repo, owner=None, **opts):
+        if kind not in self.KINDS:
+            raise UserError("git_unknown_op", op=kind)
+        if kind == "remote":
+            opts["url"] = validate_remote(opts.get("url"))
+        if kind == "restore" and not _COMMIT_OK.match(str(opts.get("commit") or "")):
+            raise UserError("git_bad_commit", commit=opts.get("commit"))
+        if kind == "gh_create" and not _REPO_NAME_OK.match(str(opts.get("name") or "")):
+            raise UserError("git_bad_name", name=opts.get("name"))
         with self._lock:
             self._counter += 1
             jid = f"git{self._counter}"
-            job = _Job(jid, kind, repo, label or kind)
-            self._jobs[jid] = job
+            self._jobs[jid] = _Job(jid, kind, repo, owner)
         self._executor.submit(self._run_job, jid, opts)
         return jid
 
-    def status(self):
+    def status(self, owner=None):
         with self._lock:
-            return [j.to_dict() for j in sorted(self._jobs.values(), key=lambda j: j.created)]
+            jobs = [j for j in self._jobs.values() if owner is None or j.owner == owner]
+            return [j.to_dict() for j in sorted(jobs, key=lambda j: j.created)]
 
-    def clear_finished(self):
+    def clear_finished(self, owner=None):
         with self._lock:
-            self._jobs = {k: v for k, v in self._jobs.items() if v.state in ("queued", "running")}
+            self._jobs = {k: v for k, v in self._jobs.items()
+                          if v.state in ("queued", "running") or (owner is not None and v.owner != owner)}
 
     # -- worker --
     def _run_job(self, jid, opts):
@@ -210,46 +281,32 @@ class GitManager:
             return
         job.state = "running"
         try:
-            handler = getattr(self, f"_do_{job.kind}", None)
-            if handler is None:
-                raise ValueError(f"Operación Git desconocida: {job.kind}")
-            # Seguridad: nunca operar dentro de un repositorio Git ajeno (p.ej. el de ComfyUI).
-            if job.kind != "clone" and is_foreign(job.repo):
-                raise RuntimeError(
-                    "La carpeta está dentro del repositorio Git de ComfyUI. Git está "
-                    "desactivado para no entrar en conflicto: define una carpeta de workflows "
-                    "propia en Ajustes."
-                )
-            handler(job, opts)
-            if job.state == "running":
-                job.state = "done"
+            getattr(self, f"_do_{job.kind}")(job, opts)
+            job.state = "done"
         except Exception as exc:  # noqa: BLE001
             job.state = "error"
             job.error = str(exc)
 
-    def _check(self, job, rc, out, err, ok_msg=""):
+    def _check(self, job, rc, out, err):
         job.log = (job.log + "\n" + (out or "") + (err or "")).strip()
         if rc != 0:
-            raise RuntimeError((err or out or f"git devolvió {rc}").strip())
-        if ok_msg:
-            job.log = (job.log + "\n" + ok_msg).strip()
+            raise RuntimeError((err or out or f"git exited with {rc}").strip())
 
-    def _ensure_identity(self, repo, opts):
+    def _ensure_identity(self, repo):
         """Configura una identidad local si no existe (git commit la exige)."""
         rc, email, _ = _git(repo, "config", "user.email")
         if rc != 0 or not email.strip():
-            name = (opts.get("author_name") or "Bone-Studio Workflow Manager").strip()
-            mail = (opts.get("author_email") or "workflow-manager@bone-studio.local").strip()
-            _git(repo, "config", "user.name", name)
-            _git(repo, "config", "user.email", mail)
+            _git(repo, "config", "user.name", "Bone-Studio Workflow Manager")
+            _git(repo, "config", "user.email", "workflow-manager@bone-studio.local")
 
     # -- handlers --
     def _do_init(self, job, opts):
+        existed = os.path.exists(os.path.join(job.repo, ".git"))
         rc, out, err = _git(job.repo, "init")
         self._check(job, rc, out, err)
-        _git(job.repo, "branch", "-M", opts.get("branch", "main"))
-        self._ensure_identity(job.repo, opts)
-        # .gitignore básico para no versionar temporales/índices internos.
+        if not existed:     # en un repositorio que ya existe, esto machacaría su rama main
+            _git(job.repo, "branch", "-M", "main")
+        self._ensure_identity(job.repo)
         gi = os.path.join(job.repo, ".gitignore")
         if not os.path.exists(gi):
             try:
@@ -259,72 +316,41 @@ class GitManager:
                 pass
 
     def _do_commit(self, job, opts):
-        self._ensure_identity(job.repo, opts)
-        paths = opts.get("paths")
-        if paths:
-            rc, out, err = _git(job.repo, "add", "--", *paths)
-        else:
-            rc, out, err = _git(job.repo, "add", "-A")
+        self._ensure_identity(job.repo)
+        rc, out, err = _git(job.repo, "add", "-A", "--", ".")
         self._check(job, rc, out, err)
-        msg = (opts.get("message") or "").strip() or "Update workflows"
-        rc, out, err = _git(job.repo, "commit", "-m", msg)
-        # "nothing to commit" no es un error real para el usuario.
-        if rc != 0 and ("nothing to commit" in (out + err).lower() or "nada para hacer commit" in (out + err).lower()):
-            job.log = (job.log + "\nNo hay cambios que confirmar.").strip()
+        if not status(job.repo):
+            job.log = (job.log + "\nNothing to commit.").strip()
             return
+        msg = (opts.get("message") or "").strip() or "Update workflows"
+        rc, out, err = _git(job.repo, "commit", "-m", msg, "--", ".")
         self._check(job, rc, out, err)
 
     def _do_remote(self, job, opts):
-        url = (opts.get("url") or "").strip()
-        if not url:
-            raise ValueError("URL de remoto vacía.")
+        url = opts["url"]
         rc, _, _ = _git(job.repo, "remote", "get-url", "origin")
-        if rc == 0:
-            rc, out, err = _git(job.repo, "remote", "set-url", "origin", url)
-        else:
-            rc, out, err = _git(job.repo, "remote", "add", "origin", url)
-        self._check(job, rc, out, err, ok_msg=f"origin → {url}")
+        verb = "set-url" if rc == 0 else "add"
+        rc, out, err = _git(job.repo, "remote", verb, "origin", url)
+        self._check(job, rc, out, err)
+        job.log = (job.log + f"\norigin -> {url}").strip()
 
     def _do_push(self, job, opts):
-        branch = opts.get("branch")
-        if not branch:
-            rc, br, _ = _git(job.repo, "rev-parse", "--abbrev-ref", "HEAD")
-            branch = br.strip() if rc == 0 else "main"
-        rc, out, err = _git(job.repo, "push", "-u", "origin", branch, timeout=300)
+        rc, out, err = _git(job.repo, "push", "-u", "origin", "HEAD", timeout=300)
         self._check(job, rc, out, err)
 
     def _do_pull(self, job, opts):
         rc, out, err = _git(job.repo, "pull", "--ff-only", timeout=300)
         self._check(job, rc, out, err)
 
-    def _do_clone(self, job, opts):
-        url = (opts.get("url") or "").strip()
-        dest = (opts.get("dest") or "").strip()
-        if not url or not dest:
-            raise ValueError("Clonar requiere URL y carpeta destino.")
-        rc, out, err = _run([GIT, "clone", url, dest], timeout=600)
-        self._check(job, rc, out, err)
-
     def _do_restore(self, job, opts):
-        commit = (opts.get("commit") or "").strip()
-        path = (opts.get("path") or "").strip()
-        if not commit:
-            raise ValueError("Restaurar requiere un commit.")
-        if path:
-            rc, out, err = _git(job.repo, "checkout", commit, "--", path)
-        else:
-            rc, out, err = _git(job.repo, "checkout", commit, "--", ".")
+        rc, out, err = _git(job.repo, "checkout", opts["commit"], "--", ".")
         self._check(job, rc, out, err)
 
     def _do_gh_create(self, job, opts):
         """Crea un repo en GitHub con `gh` y lo enlaza/empuja como origin."""
-        name = (opts.get("name") or "").strip()
-        if not name:
-            raise ValueError("Nombre de repositorio vacío.")
         visibility = "--private" if opts.get("private", True) else "--public"
-        args = [GH, "repo", "create", name, visibility, "--source", job.repo, "--remote", "origin"]
-        if opts.get("push", True):
-            args.append("--push")
+        args = [GH, "repo", "create", opts["name"], visibility,
+                "--source", job.repo, "--remote", "origin", "--push"]
         rc, out, err = _run(args, cwd=job.repo, timeout=300)
         self._check(job, rc, out, err)
 

@@ -1,7 +1,7 @@
 [project]
 name = "bs-comfyui-workflow-manager"
-version = "1.0.3"
-description = "Organize your ComfyUI workflows for production: a folder manager plus a project layer (exportable internal DB), bulk export and optional Git versioning — all from a built-in panel."
+version = "1.1.0"
+description = "Organize your ComfyUI workflows for production: projects and folders in one tree, saves mirrored to project folders, bulk export and optional Git versioning — all from a built-in panel."
 authors = [
     { name = "Enob-Studio S.L." },
     { name = "Juan Gea", email = "juangea@bone-studio.com" },

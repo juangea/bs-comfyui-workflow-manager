@@ -2,17 +2,19 @@
 # Copyright (C) 2026 Enob-Studio S.L. and Juan Gea
 """Rutas HTTP registradas en el PromptServer de ComfyUI (aiohttp).
 
-Sirve la mini-app web (en `webapp/`) y expone la API JSON del gestor de workflows: vista general
-(FS), proyectos (BD), exportación a .zip, integración Git e import/export de la base de datos.
-Todas las rutas cuelgan del prefijo `/bs_workflow_manager`.
+Sirve la mini-app web (en `webapp/`) y expone su API JSON. Todas las rutas cuelgan del prefijo
+`/bs_workflow_manager`.
 
 Nota: el módulo top-level `server` es el de ComfyUI (PromptServer). Nuestro paquete se llama `bswm`
 precisamente para no ensombrecerlo.
 """
+import asyncio
+import functools
 import json
 import logging
 import mimetypes
 import os
+from urllib.parse import quote
 
 from aiohttp import web
 from server import PromptServer
@@ -22,7 +24,7 @@ mimetypes.add_type("font/woff2", ".woff2")
 
 from . import config, fsbrowse, git_ops, projects, workflows
 from .exporter import manager as export_manager
-from .util import normalize_rel, safe_join
+from .util import UserError, normalize_rel, safe_join
 
 log = logging.getLogger("BS_Workflow_Manager")
 
@@ -34,621 +36,377 @@ routes = PromptServer.instance.routes
 
 
 # ----------------------------- helpers -----------------------------
-def _err(message, status=400):
-    return web.json_response({"error": str(message)}, status=status)
+def _ok(**data):
+    return web.json_response({"ok": True, **data})
+
+
+def _bind_user(request):
+    """Usa el usuario de ComfyUI de la petición (relevante con --multi-user)."""
+    manager = getattr(PromptServer.instance, "user_manager", None)
+    if manager is None:
+        return
+    try:
+        config.set_request_user(manager.get_request_user_id(request))
+    except KeyError:
+        raise UserError("unknown_user")
+
+
+def _api(handler):
+    """Vincula el usuario y convierte errores en respuestas JSON con código traducible."""
+    @functools.wraps(handler)
+    async def wrapper(request):
+        try:
+            _bind_user(request)
+            return await handler(request)
+        except UserError as exc:
+            return web.json_response({"error": str(exc), "code": exc.code, "params": exc.params}, status=400)
+        except OSError as exc:
+            log.warning("%s: %s", request.path, exc)
+            return web.json_response({"error": str(exc)}, status=400)
+        except web.HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.exception(request.path)
+            return web.json_response({"error": str(exc)}, status=500)
+    return wrapper
+
+
+def get(path):
+    return lambda fn: routes.get(PREFIX + "/api" + path)(_api(fn))
+
+
+def post(path):
+    return lambda fn: routes.post(PREFIX + "/api" + path)(_api(fn))
 
 
 async def _body(request):
+    # Exigir JSON obliga a un preflight CORS: otra web no puede lanzar estas operaciones a ciegas.
+    if request.content_type != "application/json":
+        raise web.HTTPUnsupportedMediaType(text="application/json required")
     try:
-        return await request.json()
-    except Exception:
-        return {}
-
-
-def _json_file_response(abs_path, download_name=None):
-    """Sirve un workflow .json (inline para abrir, o como adjunto para descargar)."""
-    if not os.path.isfile(abs_path):
-        return _err("El workflow no existe.", 404)
-    with open(abs_path, "rb") as fh:
-        data = fh.read()
-    headers = {}
-    if download_name:
-        headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
-    return web.Response(body=data, content_type="application/json", headers=headers)
-
-
-def _resolve_repo(spec):
-    """Convierte un 'repo spec' (studio | <project_id>) en una ruta de repo Git."""
-    if not spec or spec == "studio":
-        return workflows.get_root()
-    db = projects.load_db()
-    try:
-        p = projects._get(db, spec)
+        data = await request.json()
     except ValueError:
-        return workflows.get_root()
-    if p.get("storage") == "folder" and p.get("folder"):
-        return os.path.abspath(p["folder"])
-    return workflows.get_root()
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-# ----------------------------- API: config / meta -----------------------------
-@routes.get(PREFIX + "/api/config")
+def _query(request, name, default=""):
+    return request.rel_url.query.get(name, default)
+
+
+def _attachment(name):
+    return {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name, errors='replace')}"}
+
+
+def _git_protected():
+    return [workflows.get_root(), config.comfy_code_dir()]
+
+
+def _content_text(content):
+    return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+
+
+# ----------------------------- estado -----------------------------
+@get("/config")
 async def api_config(request):
-    try:
-        root = workflows.get_root()
-        comfy_root = config.default_workflows_root()
-        is_default = os.path.normcase(os.path.abspath(root)) == os.path.normcase(os.path.abspath(comfy_root))
-        return web.json_response({
-            "workflows_root": root,
-            "user_workflows_root": comfy_root,
-            "is_default_root": is_default,
-            "db_path": config.get_db_path(),
-            "git": git_ops.detect(),
-        })
-    except Exception as exc:
-        log.exception("api/config")
-        return _err(exc, 500)
+    return web.json_response({"comfy_root": workflows.get_root(), "db_path": config.get_db_path(),
+                              "git": await asyncio.to_thread(git_ops.detect)})
 
 
-@routes.post(PREFIX + "/api/config/root")
-async def api_config_root(request):
-    data = await _body(request)
-    try:
-        config.set_workflows_root(data.get("path"))
-        return web.json_response({"ok": True, "workflows_root": workflows.get_root()})
-    except ValueError as exc:
-        return _err(exc, 400)
+@get("/tree")
+async def api_tree(request):
+    return web.json_response(projects.tree())
 
 
-@routes.post(PREFIX + "/api/config/db")
-async def api_config_db(request):
-    data = await _body(request)
-    config.set_db_path(data.get("path"))
-    return web.json_response({"ok": True, "db_path": config.get_db_path()})
-
-
-# ----------------------------- API: explorador de carpetas del servidor -----------------------------
-@routes.get(PREFIX + "/api/fs/list")
+# ----------------------------- explorador de carpetas del servidor -----------------------------
+@get("/fs/list")
 async def api_fs_list(request):
-    try:
-        return web.json_response(fsbrowse.list_dir(request.rel_url.query.get("path", "")))
-    except ValueError as exc:
-        return _err(exc, 400)
-    except Exception as exc:
-        log.exception("api/fs/list")
-        return _err(exc, 500)
+    return web.json_response(fsbrowse.list_dir(_query(request, "path")))
 
 
-@routes.post(PREFIX + "/api/fs/mkdir")
+@post("/fs/mkdir")
 async def api_fs_mkdir(request):
     data = await _body(request)
-    try:
-        full = fsbrowse.mkdir(data.get("path"), data.get("name"))
-        return web.json_response({"ok": True, "path": full})
-    except ValueError as exc:
-        return _err(exc, 400)
-    except OSError as exc:
-        return _err(str(exc), 400)
+    return _ok(path=fsbrowse.mkdir(data.get("path"), data.get("name")))
 
 
-# ----------------------------- API: workflows (general) -----------------------------
-@routes.get(PREFIX + "/api/workflows/list")
-async def api_workflows_list(request):
-    try:
-        tree = workflows.list_tree()
-        tree["under_user_root"] = os.path.normcase(tree["root"]).startswith(
-            os.path.normcase(config.default_workflows_root()))
-        return web.json_response(tree)
-    except Exception as exc:
-        log.exception("api/workflows/list")
-        return _err(exc, 500)
+# ----------------------------- workflows -----------------------------
+@get("/workflow/download")
+async def api_workflow_download(request):
+    path = projects.source_file(_query(request, "path"))
+    with open(path, "rb") as fh:
+        body = fh.read()
+    return web.Response(body=body, content_type="application/json",
+                        headers=_attachment(os.path.basename(path)))
 
 
-@routes.get(PREFIX + "/api/workflows/content")
-async def api_workflows_content(request):
-    rel = request.rel_url.query.get("rel", "")
-    download = request.rel_url.query.get("download", "") == "1"
-    try:
-        abs_path = workflows.abs_path(rel)
-    except ValueError as exc:
-        return _err(exc, 400)
-    return _json_file_response(abs_path, os.path.basename(rel) if download else None)
+@post("/workflow/prepare-open")
+async def api_prepare_open(request):
+    return _ok(path=projects.prepare_open((await _body(request)).get("path")))
 
 
-@routes.get(PREFIX + "/api/workflows/inspect")
-async def api_workflows_inspect(request):
-    """Metadatos ligeros de un workflow: nº de nodos y modelos declarados (best-effort)."""
-    rel = request.rel_url.query.get("rel", "")
-    try:
-        data = json.loads(workflows.read_bytes(rel).decode("utf-8"))
-    except Exception as exc:
-        return _err(f"No se pudo leer el workflow: {exc}", 400)
-    nodes = data.get("nodes") if isinstance(data, dict) else None
-    node_count = len(nodes) if isinstance(nodes, list) else 0
-    models = []
-    seen = set()
-    if isinstance(nodes, list):
-        for n in nodes:
-            props = (n or {}).get("properties") or {}
-            for m in (props.get("models") or []):
-                key = (m.get("name"), m.get("url"))
-                if m.get("name") and key not in seen:
-                    seen.add(key)
-                    models.append({"name": m.get("name"), "directory": m.get("directory", "")})
-    return web.json_response({"nodes": node_count, "models": models})
-
-
-@routes.post(PREFIX + "/api/workflows/mkdir")
-async def api_workflows_mkdir(request):
+@post("/workflow/rename")
+async def api_workflow_rename(request):
     data = await _body(request)
-    try:
-        folder = workflows.mkdir(data.get("folder", ""))
-        return web.json_response({"ok": True, "folder": folder})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(**projects.rename_item(data.get("path"), data.get("new_name"), bool(data.get("dry_run")),
+                                      bool(data.get("general_moved"))))
 
 
-@routes.post(PREFIX + "/api/workflows/rename")
-async def api_workflows_rename(request):
+@post("/workflow/move")
+async def api_workflow_move(request):
     data = await _body(request)
-    try:
-        rel = workflows.rename(data.get("rel"), data.get("new_name"))
-        return web.json_response({"ok": True, "rel": rel})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(**projects.move_item(data.get("path"), data.get("from_project"), data.get("to_project"),
+                                    data.get("folder", ""), bool(data.get("dry_run")),
+                                    bool(data.get("general_moved")), bool(data.get("exclusive"))))
 
 
-@routes.post(PREFIX + "/api/workflows/move")
-async def api_workflows_move(request):
+@post("/workflow/add-to-project")
+async def api_workflow_add(request):
     data = await _body(request)
-    try:
-        rel = workflows.move(data.get("rel"), data.get("dest_folder", ""))
-        return web.json_response({"ok": True, "rel": rel})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(**projects.add_to_project(data.get("path"), data.get("project"), data.get("folder", ""),
+                                         bool(data.get("allow_multi")), bool(data.get("dry_run")),
+                                         bool(data.get("general_moved"))))
 
 
-@routes.post(PREFIX + "/api/workflows/duplicate")
-async def api_workflows_duplicate(request):
+@post("/workflow/undo-move")
+async def api_workflow_undo_move(request):
     data = await _body(request)
-    try:
-        rel = workflows.duplicate(data.get("rel"), data.get("dest_folder"), data.get("new_name"))
-        return web.json_response({"ok": True, "rel": rel})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(**projects.undo_move(data.get("old"), data.get("new"), data.get("links"), data.get("copied"),
+                                    data.get("copied_mtime"), bool(data.get("dry_run")),
+                                    bool(data.get("general_moved"))))
 
 
-@routes.post(PREFIX + "/api/workflows/delete")
-async def api_workflows_delete(request):
+@post("/workflow/check-free")
+async def api_workflow_check_free(request):
+    projects.check_free((await _body(request)).get("path"))
+    return _ok()
+
+
+@post("/workflow/remove-from-project")
+async def api_workflow_unlink(request):
     data = await _body(request)
-    try:
-        workflows.delete(data.get("rel"))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
+    projects.unlink(data.get("project"), data.get("path"))
+    return _ok()
 
 
-@routes.post(PREFIX + "/api/workflows/delete-folder")
-async def api_workflows_delete_folder(request):
+@post("/workflow/duplicate")
+async def api_workflow_duplicate(request):
     data = await _body(request)
-    try:
-        workflows.delete_folder(data.get("folder"))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(path=projects.duplicate_item(data.get("path"), data.get("project"), data.get("folder"),
+                                            data.get("new_name")))
 
 
-@routes.post(PREFIX + "/api/workflows/rename-folder")
-async def api_workflows_rename_folder(request):
-    data = await _body(request)
-    try:
-        folder = workflows.rename_folder(data.get("folder"), data.get("new_name"))
-        return web.json_response({"ok": True, "folder": folder})
-    except ValueError as exc:
-        return _err(exc, 400)
+@post("/workflow/delete")
+async def api_workflow_delete(request):
+    projects.delete_item((await _body(request)).get("path"))
+    return _ok()
 
 
-# ----------------------------- API: traspaso desde ComfyUI -----------------------------
-@routes.get(PREFIX + "/api/comfy/list")
-async def api_comfy_list(request):
-    """Lista los workflows de usuario de la carpeta nativa de ComfyUI (para traspasar a la nuestra)."""
-    comfy_root = config.default_workflows_root()
-    our_root = workflows.get_root()
-    same = os.path.normcase(os.path.abspath(comfy_root)) == os.path.normcase(os.path.abspath(our_root))
-    try:
-        tree = workflows.list_tree(root=comfy_root) if os.path.isdir(comfy_root) else {"workflows": []}
-    except Exception as exc:
-        log.exception("api/comfy/list")
-        return _err(exc, 500)
-    return web.json_response({
-        "comfy_root": comfy_root,
-        "same_as_root": same,
-        "workflows": tree["workflows"],
-    })
-
-
-@routes.post(PREFIX + "/api/comfy/transfer")
-async def api_comfy_transfer(request):
-    data = await _body(request)
-    refs = data.get("refs") or []
-    if not refs:
-        return _err("No se ha seleccionado ningún workflow.", 400)
-    try:
-        res = workflows.transfer_from(
-            config.default_workflows_root(), refs,
-            dest_folder=data.get("dest_folder", ""), move=bool(data.get("move")),
-        )
-        return web.json_response({"ok": True, **res})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.post(PREFIX + "/api/workflows/import")
-async def api_workflows_import(request):
+@post("/workflow/import")
+async def api_workflow_import(request):
+    """Importa un .json a una carpeta de Workflows o a un proyecto."""
     data = await _body(request)
     content = data.get("content")
-    rel = data.get("rel") or data.get("name")
-    if content is None or not rel:
-        return _err("Faltan 'rel'/'name' o 'content'.", 400)
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
-    try:
-        rel = workflows.write(rel, content, overwrite=bool(data.get("overwrite")))
-        return web.json_response({"ok": True, "rel": rel})
-    except ValueError as exc:
-        return _err(exc, 400)
+    if content is None:
+        raise UserError("missing_field", field="content")
+    return _ok(path=projects.import_workflow(data.get("name"), _content_text(content), data.get("project"),
+                                             data.get("folder", "")))
 
 
-# ----------------------------- API: proyectos -----------------------------
-@routes.get(PREFIX + "/api/projects")
-async def api_projects(request):
-    try:
-        return web.json_response(projects.resolve())
-    except Exception as exc:
-        log.exception("api/projects")
-        return _err(exc, 500)
-
-
-@routes.post(PREFIX + "/api/projects/create")
-async def api_projects_create(request):
+# ----------------------------- eventos de ComfyUI (Guardar, renombrar, borrar) -----------------------------
+@post("/events/saved")
+async def api_event_saved(request):
     data = await _body(request)
-    try:
-        p = projects.create_project(
-            name=data.get("name"), color=data.get("color", "#AC1F23"),
-            storage=data.get("storage", "virtual"), folder=data.get("folder"),
-            git=data.get("git"), notes=data.get("notes", ""),
-            subfolders=data.get("subfolders"),
-        )
-        return web.json_response({"ok": True, "project": p})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(mirrored=projects.on_saved(data.get("path"), bool(data.get("created"))))
 
 
-@routes.post(PREFIX + "/api/projects/update")
-async def api_projects_update(request):
+@post("/events/renamed")
+async def api_event_renamed(request):
     data = await _body(request)
-    pid = data.pop("id", None)
-    if not pid:
-        return _err("Falta el id del proyecto.", 400)
-    try:
-        p = projects.update_project(pid, **data)
-        return web.json_response({"ok": True, "project": p})
-    except ValueError as exc:
-        return _err(exc, 400)
+    projects.on_renamed(data.get("old"), data.get("new"))
+    return _ok()
 
 
-@routes.post(PREFIX + "/api/projects/delete")
-async def api_projects_delete(request):
+@post("/events/deleted")
+async def api_event_deleted(request):
+    projects.on_deleted((await _body(request)).get("path"))
+    return _ok()
+
+
+# ----------------------------- carpetas de Workflows -----------------------------
+@post("/folder/create")
+async def api_folder_create(request):
+    return _ok(folder=projects.create_general_folder((await _body(request)).get("folder", "")))
+
+
+@post("/folder/move")
+async def api_folder_move(request):
     data = await _body(request)
-    try:
-        projects.delete_project(data.get("id"), delete_files=bool(data.get("delete_files")))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(folder=projects.rename_general_folder(data.get("folder"), data.get("new_folder")))
 
 
-@routes.post(PREFIX + "/api/projects/active")
-async def api_projects_active(request):
+@post("/folder/delete")
+async def api_folder_delete(request):
+    return _ok(**projects.delete_general_folder((await _body(request)).get("folder")))
+
+
+# ----------------------------- proyectos -----------------------------
+@post("/project/create")
+async def api_project_create(request):
     data = await _body(request)
-    try:
-        pid = projects.set_active_project(data.get("id"))
-        return web.json_response({"ok": True, "active_project": pid})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(project=projects.create_project(
+        data.get("name"), color=data.get("color"), folder=data.get("folder"), notes=data.get("notes", "")))
 
 
-@routes.post(PREFIX + "/api/projects/subfolder/add")
-async def api_projects_subfolder_add(request):
+@post("/project/update")
+async def api_project_update(request):
     data = await _body(request)
-    try:
-        subs = projects.add_subfolder(data.get("id"), data.get("name"))
-        return web.json_response({"ok": True, "subfolders": subs})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(project=projects.update_project(
+        data.get("id"), name=data.get("name"), color=data.get("color"), notes=data.get("notes"),
+        folder=data.get("folder")))
 
 
-@routes.post(PREFIX + "/api/projects/subfolder/remove")
-async def api_projects_subfolder_remove(request):
+@post("/project/delete")
+async def api_project_delete(request):
     data = await _body(request)
-    try:
-        subs = projects.remove_subfolder(data.get("id"), data.get("name"))
-        return web.json_response({"ok": True, "subfolders": subs})
-    except ValueError as exc:
-        return _err(exc, 400)
+    projects.delete_project(data.get("id"), delete_files=bool(data.get("delete_files")))
+    return _ok()
 
 
-@routes.post(PREFIX + "/api/projects/link")
-async def api_projects_link(request):
+@post("/project/subfolder/add")
+async def api_subfolder_add(request):
     data = await _body(request)
-    try:
-        link = projects.link_workflow(
-            data.get("project_id"), data.get("workflow_ref"),
-            subfolder=data.get("subfolder", ""), alias=data.get("alias", ""),
-            allow_multi=bool(data.get("allow_multi")),
-        )
-        return web.json_response({"ok": True, "link": link})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(folder=projects.add_subfolder(data.get("id"), data.get("name")))
 
 
-@routes.post(PREFIX + "/api/projects/unlink")
-async def api_projects_unlink(request):
+@post("/project/subfolder/rename")
+async def api_subfolder_rename(request):
     data = await _body(request)
-    try:
-        projects.unlink(data.get("link_id"))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
+    return _ok(folder=projects.rename_subfolder(data.get("id"), data.get("old"), data.get("new")))
 
 
-@routes.post(PREFIX + "/api/projects/move")
-async def api_projects_move(request):
+@post("/project/subfolder/remove")
+async def api_subfolder_remove(request):
     data = await _body(request)
-    try:
-        res = projects.project_move(
-            data.get("pid"), data.get("ref"),
-            data.get("target_pid"), data.get("target_subfolder", ""),
-        )
-        return web.json_response({"ok": True, **res})
-    except ValueError as exc:
-        return _err(exc, 400)
+    projects.remove_subfolder(data.get("id"), data.get("name"))
+    return _ok()
 
 
-@routes.post(PREFIX + "/api/projects/rename")
-async def api_projects_rename(request):
-    data = await _body(request)
-    try:
-        rel = projects.project_rename(data.get("pid"), data.get("ref"), data.get("new_name"))
-        return web.json_response({"ok": True, "ref": rel})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.post(PREFIX + "/api/projects/duplicate")
-async def api_projects_duplicate(request):
-    data = await _body(request)
-    try:
-        res = projects.project_duplicate(
-            data.get("pid"), data.get("ref"),
-            target_pid=data.get("target_pid"),
-            target_subfolder=data.get("target_subfolder", ""),
-            new_name=data.get("new_name"),
-        )
-        return web.json_response({"ok": True, **res})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.post(PREFIX + "/api/projects/delete-file")
-async def api_projects_delete_file(request):
-    data = await _body(request)
-    try:
-        projects.project_delete_file(data.get("pid"), data.get("ref"))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.post(PREFIX + "/api/projects/add-current")
-async def api_projects_add_current(request):
-    data = await _body(request)
-    try:
-        res = projects.add_current_to_project(
-            data.get("pid"), data.get("rel"), subfolder=data.get("subfolder", ""),
-            alias=data.get("alias", ""), allow_multi=bool(data.get("allow_multi")),
-        )
-        return web.json_response({"ok": True, **res})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.post(PREFIX + "/api/projects/save-canvas")
-async def api_projects_save_canvas(request):
-    data = await _body(request)
-    content = data.get("content")
-    if content is None or not data.get("name"):
-        return _err("Faltan 'name' o 'content'.", 400)
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
-    try:
-        res = projects.save_canvas(
-            data.get("pid"), data.get("name"), content,
-            subfolder=data.get("subfolder", ""), overwrite=bool(data.get("overwrite")),
-        )
-        return web.json_response({"ok": True, **res})
-    except ValueError as exc:
-        return _err(exc, 400)
-
-
-@routes.get(PREFIX + "/api/projects/content")
-async def api_projects_content(request):
-    pid = request.rel_url.query.get("pid", "")
-    ref = request.rel_url.query.get("ref", "")
-    download = request.rel_url.query.get("download", "") == "1"
-    try:
-        abs_path, _ = projects.project_workflow_abs(pid, ref)
-    except ValueError as exc:
-        return _err(exc, 400)
-    return _json_file_response(abs_path, os.path.basename(ref) if download else None)
-
-
-# ----------------------------- API: exportación -----------------------------
-def _export_files_for(data):
-    """Construye la lista (abs_path, arcname) para un job de exportación según el modo."""
-    mode = data.get("mode")
-    files = []
-    name = "workflows"
-    if mode == "general_selection":
-        for rel in (data.get("refs") or []):
-            rel = normalize_rel(rel)
-            files.append((workflows.abs_path(rel), rel))
-        name = "workflows"
-    elif mode == "general_folder":
-        folder = normalize_rel(data.get("folder", ""))
+# ----------------------------- exportación -----------------------------
+def _export_files(data):
+    """Construye (nombre, [(abs_path, arcname)]) para un job de exportación."""
+    pid = data.get("project")
+    if pid:
+        return projects.project_export_files(pid, normalize_rel(data["folder"]) if data.get("folder") else None)
+    folder = data.get("folder")
+    if folder is not None:
+        folder = normalize_rel(folder)
         root = workflows.get_root()
         base = safe_join(root, *folder.split("/")) if folder else root
-        for w in workflows.list_tree(root=base)["workflows"]:
-            files.append((os.path.join(base, *w["rel"].split("/")), w["rel"]))
-        name = folder.replace("/", "_") or "workflows"
-    elif mode == "project_selection":
-        pid = data.get("pid")
-        db = projects.load_db()
-        p = projects._get(db, pid)
-        name = p["name"]
-        for ref in (data.get("refs") or []):
-            abs_path, _ = projects.project_workflow_abs(pid, ref)
-            files.append((abs_path, f"{name}/{normalize_rel(ref)}"))
-    elif mode in ("project", "project_subfolder"):
-        sub = normalize_rel(data.get("subfolder", "")) if mode == "project_subfolder" else None
-        for proj in projects.resolve()["projects"]:
-            if proj["id"] != data.get("pid"):
-                continue
-            name = proj["name"]
-            for item in proj["items"]:
-                if not item["exists"]:
-                    continue
-                if sub is not None and item["subfolder"] != sub:
-                    continue
-                arc = f"{item['subfolder']}/{item['name']}" if item["subfolder"] else item["name"]
-                files.append((item["abs"], f"{name}/{arc}"))
-            break
-    else:
-        raise ValueError(f"Modo de exportación no válido: {mode}")
-    return name, files
+        files = [(os.path.join(base, *w["rel"].split("/")), w["rel"])
+                 for w in workflows.list_tree(root=base)["workflows"]]
+        return folder.replace("/", "_") or "workflows", files
+    files = []
+    for path in data.get("paths") or []:
+        rel = normalize_rel(path)
+        files.append((projects.source_file(rel), rel))
+    return data.get("name") or "workflows", files
 
 
-@routes.post(PREFIX + "/api/export")
+@post("/export")
 async def api_export(request):
-    data = await _body(request)
-    try:
-        name, files = _export_files_for(data)
-        if not files:
-            return _err("No hay workflows que exportar.", 400)
-        jid = export_manager.enqueue(name, files)
-        return web.json_response({"ok": True, "job": jid})
-    except ValueError as exc:
-        return _err(exc, 400)
+    name, files = _export_files(await _body(request))
+    if not files:
+        raise UserError("nothing_to_export")
+    return _ok(job=export_manager.enqueue(name, files, config.current_user()))
 
 
-@routes.get(PREFIX + "/api/export/status")
+@get("/export/status")
 async def api_export_status(request):
-    return web.json_response({"jobs": export_manager.status()})
+    return web.json_response({"jobs": export_manager.status(config.current_user())})
 
 
-@routes.get(PREFIX + "/api/export/download")
+@get("/export/download")
 async def api_export_download(request):
-    jid = request.rel_url.query.get("id", "")
-    job = export_manager.get(jid)
+    job = export_manager.get(_query(request, "id"), config.current_user())
     if not job or job.state != "done" or not job.zip_path or not os.path.isfile(job.zip_path):
-        return _err("El archivo no está listo.", 404)
-    return web.FileResponse(job.zip_path, headers={
-        "Content-Disposition": f'attachment; filename="{os.path.basename(job.zip_path)}"'})
+        raise UserError("export_not_ready")
+    return web.FileResponse(job.zip_path, headers=_attachment(f"{job.name}.zip"))
 
 
-@routes.post(PREFIX + "/api/export/clear")
+@post("/export/clear")
 async def api_export_clear(request):
-    export_manager.clear_finished()
-    return web.json_response({"ok": True})
+    export_manager.clear_finished(config.current_user())
+    return _ok()
 
 
-# ----------------------------- API: base de datos (import/export) -----------------------------
-@routes.get(PREFIX + "/api/db/export")
+# ----------------------------- base de datos (import/export) -----------------------------
+@get("/db/export")
 async def api_db_export(request):
-    body = json.dumps(projects.export_db(), ensure_ascii=False, indent=2).encode("utf-8")
-    return web.Response(body=body, content_type="application/json", headers={
-        "Content-Disposition": 'attachment; filename="bswm_projects.json"'})
+    body = json.dumps(projects.export_db(), ensure_ascii=False, indent=2).encode("utf-8", "backslashreplace")
+    return web.Response(body=body, content_type="application/json", headers=_attachment("bswm_projects.json"))
 
 
-@routes.post(PREFIX + "/api/db/import")
+@post("/db/import")
 async def api_db_import(request):
     data = await _body(request)
-    payload = data.get("data")
-    if payload is None:
-        return _err("Falta 'data'.", 400)
-    try:
-        projects.import_db(payload, merge=bool(data.get("merge")))
-        return web.json_response({"ok": True})
-    except ValueError as exc:
-        return _err(exc, 400)
+    if data.get("data") is None:
+        raise UserError("missing_field", field="data")
+    projects.import_db(data["data"], merge=bool(data.get("merge")))
+    return _ok()
 
 
-# ----------------------------- API: Git -----------------------------
-@routes.get(PREFIX + "/api/git/detect")
+# ----------------------------- Git -----------------------------
+@get("/git/detect")
 async def api_git_detect(request):
-    return web.json_response(git_ops.detect())
+    return web.json_response(await asyncio.to_thread(git_ops.detect))
 
 
-def _is_comfy_default(repo):
-    return os.path.normcase(os.path.abspath(repo)) == os.path.normcase(os.path.abspath(config.default_workflows_root()))
-
-
-@routes.get(PREFIX + "/api/git/info")
+@get("/git/info")
 async def api_git_info(request):
-    repo = _resolve_repo(request.rel_url.query.get("repo", "studio"))
-    info = git_ops.info(repo)
-    # Bloqueamos Git si la carpeta es la propia de ComfyUI (por seguridad) o cuelga de su repo.
-    info["is_comfy_default"] = _is_comfy_default(repo)
-    info["git_blocked"] = bool(info.get("foreign") or info["is_comfy_default"])
-    return web.json_response(info)
+    folder = projects.git_folder(_query(request, "project"))
+    return web.json_response(await asyncio.to_thread(git_ops.info, folder, _git_protected()))
 
 
-@routes.get(PREFIX + "/api/git/log")
+@get("/git/log")
 async def api_git_log(request):
-    repo = _resolve_repo(request.rel_url.query.get("repo", "studio"))
-    n = int(request.rel_url.query.get("n", "50") or 50)
-    path = request.rel_url.query.get("path") or None
-    return web.json_response({"log": git_ops.log(repo, n=n, path=path)})
+    folder = projects.git_folder(_query(request, "project"))
+    if await asyncio.to_thread(git_ops.is_blocked, folder, _git_protected()):
+        return web.json_response({"log": []})
+    try:
+        n = int(_query(request, "n", "50"))
+    except ValueError:
+        n = 50
+    return web.json_response({"log": await asyncio.to_thread(git_ops.log, folder, n=n)})
 
 
-@routes.post(PREFIX + "/api/git/run")
+@post("/git/run")
 async def api_git_run(request):
     data = await _body(request)
+    pid = data.get("project")
+    folder = projects.git_folder(pid)
+    if not (await asyncio.to_thread(git_ops.detect))["git"]["available"]:
+        raise UserError("git_missing")
+    # Seguridad: nunca operar sobre la carpeta de ComfyUI ni dentro de su repositorio.
+    if await asyncio.to_thread(git_ops.is_blocked, folder, _git_protected()):
+        raise UserError("git_blocked")
     kind = data.get("kind")
-    if not kind:
-        return _err("Falta 'kind'.", 400)
-    det = git_ops.detect()
-    if not det["git"]["available"]:
-        return _err("git no está instalado en el sistema.", 400)
-    repo = _resolve_repo(data.get("repo", "studio"))
-    # Seguridad: nunca operar sobre la carpeta propia de ComfyUI ni dentro de su repositorio.
-    if kind != "clone" and (git_ops.is_foreign(repo) or _is_comfy_default(repo)):
-        return _err(
-            "Esta carpeta es la de ComfyUI o cuelga de su repositorio Git. Git está desactivado "
-            "para no entrar en conflicto. Define una carpeta de workflows propia en Ajustes.", 400)
-    opts = {k: v for k, v in data.items() if k not in ("kind", "repo")}
-    jid = git_ops.manager.enqueue(kind, repo, label=kind, **opts)
-    return web.json_response({"ok": True, "job": jid})
+    opts = {k: data[k] for k in ("message", "url", "commit", "name", "private") if k in data}
+    jid = git_ops.manager.enqueue(kind, folder, owner=config.current_user(), **opts)
+    if kind == "remote":
+        projects.set_remote(pid, opts.get("url", ""))
+    return _ok(job=jid)
 
 
-@routes.get(PREFIX + "/api/git/jobs")
+@get("/git/jobs")
 async def api_git_jobs(request):
-    return web.json_response({"jobs": git_ops.manager.status()})
+    return web.json_response({"jobs": git_ops.manager.status(config.current_user())})
 
 
-@routes.post(PREFIX + "/api/git/clear")
+@post("/git/clear")
 async def api_git_clear(request):
-    git_ops.manager.clear_finished()
-    return web.json_response({"ok": True})
+    git_ops.manager.clear_finished(config.current_user())
+    return _ok()
 
 
 # ----------------------------- estáticos (mini-app) -----------------------------

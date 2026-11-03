@@ -16,216 +16,116 @@
               font-family="Jost, 'Century Gothic', 'Arial Rounded MT Bold', Arial, sans-serif"
               font-weight="700" font-size="62" letter-spacing="-1" fill="#FAF0DC">BS-WM</text>
       </svg>
-      <div class="brand-words">
-        <div class="brand-name">Bone-Studio</div>
-        <div class="brand-app">Workflow Manager</div>
-      </div>
     </a>
     <nav class="tabs">
-      <button class="tab active" data-view="general" data-i18n="tab_general">General</button>
-      <button class="tab" data-view="projects" data-i18n="tab_projects">Projects</button>
+      <button class="tab active" data-view="library" data-i18n="tab_library">Library</button>
       <button class="tab" data-view="git" data-i18n="tab_git">Git</button>
       <button class="tab" data-view="settings" data-i18n="tab_settings">Settings</button>
     </nav>
     <div class="header-right">
-      <button id="help-btn" class="help-btn" aria-label="Help" data-i18n-title="help_tooltip" title="Help / Ayuda">?</button>
-      <div class="lang-toggle" role="group" aria-label="Language">
+      <button id="help-btn" class="help-btn" aria-label="Help" data-i18n-title="help_tooltip" title="Help">?</button>
+      <div class="lang-toggle" role="group" aria-label="Language" data-i18n-aria="aria_language">
         <button class="lang-btn" data-lang="en">EN</button>
         <button class="lang-btn" data-lang="es">ES</button>
       </div>
     </div>
   </header>
 
-  <!-- ============ VIEW: GENERAL ============ -->
-  <section id="view-general" class="view active">
-    <div class="panel">
-      <div class="row toolbar">
-        <button id="g-refresh" class="btn small" data-i18n="btn_refresh">Refresh</button>
-        <input id="g-filter" type="text" class="filter" data-i18n-ph="ph_filter_wf"
-               placeholder="Search: multiple terms (e.g. wan video)" />
-        <span class="spacer"></span>
-        <button id="g-save-into" class="btn small primary" data-i18n="btn_save_into_general" data-i18n-title="st_save_native_hint">Save to folder</button>
-        <button id="g-save" class="btn small" data-i18n="btn_save_as" title="Save the current ComfyUI canvas under a new name/folder">Save as…</button>
-        <button id="g-newfolder" class="btn small" data-i18n="btn_new_folder">New folder</button>
-        <button id="g-import" class="btn small" data-i18n="btn_import">Import…</button>
-        <button id="g-from-comfy" class="btn small" data-i18n="btn_from_comfy">From ComfyUI…</button>
-      </div>
-      <div id="g-crumbs" class="crumbs"></div>
-      <div id="g-status" class="status"></div>
-      <div class="table-wrap" id="g-browser-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th class="c-file" data-i18n="th_workflow">Workflow</th>
-              <th class="c-size" data-i18n="th_size">Size</th>
-            </tr>
-          </thead>
-          <tbody id="g-body"></tbody>
-        </table>
-      </div>
-      <div class="row footer">
-        <span id="g-summary" class="muted"></span>
-        <span class="spacer"></span>
-        <span id="g-selinfo" class="muted"></span>
-        <button id="g-export-sel" class="btn small" data-i18n="btn_export_sel">Export selected</button>
-      </div>
-      <div class="hint" data-i18n="hint_select">Click to select · Ctrl/⌘-click multi · Shift-click range · double-click to open · right-click for actions</div>
+  <!-- Workflow activo y guardado -->
+  <div id="savebar" class="savebar">
+    <div class="sb-info">
+      <div class="sb-name"><span id="sb-mod" class="mod-dot hidden"></span><span id="sb-name"></span></div>
+      <div id="sb-target" class="sb-target"></div>
     </div>
+    <button id="sb-save" class="btn primary" data-i18n="btn_save">Save</button>
+    <button id="sb-save-project" class="btn" data-i18n="btn_save_project" data-i18n-title="btn_save_project_tip">To project…</button>
+  </div>
 
-    <div class="panel" id="g-exports-panel">
-      <div class="row"><h3 data-i18n="h_exports">Exports</h3><span class="spacer"></span>
-        <button class="btn small export-clear" data-i18n="btn_clear_finished">Clear finished</button></div>
-      <div class="export-jobs" data-jobs="export"></div>
-    </div>
-  </section>
+  <div id="status" class="status" role="status"></div>
 
-  <!-- ============ VIEW: PROJECTS ============ -->
-  <section id="view-projects" class="view">
-    <div class="split">
-      <aside class="split-side">
-        <div class="panel">
-          <div class="row toolbar">
-            <h3 data-i18n="h_projects">Projects</h3>
-            <span class="spacer"></span>
-            <button id="p-new" class="btn small primary" data-i18n="btn_new_project">New</button>
-          </div>
-          <div id="p-list" class="proj-list"></div>
-        </div>
-      </aside>
-      <div class="split-main">
-        <div class="panel" id="p-detail">
-          <div id="p-empty" class="empty-state">
-            <svg viewBox="0 0 24 24" class="empty-ico" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-            <div class="empty-title" data-i18n="p_empty_title">No project selected</div>
-            <div class="muted" data-i18n="p_empty">Create a project to group your production workflows, or pick one on the left.</div>
-            <button id="p-empty-new" class="btn primary" data-i18n="f_new_project">New project</button>
-          </div>
-          <div id="p-content" class="hidden">
-            <div class="row toolbar">
-              <span class="dot" id="p-dot"></span>
-              <h3 id="p-title" style="margin:0"></h3>
-              <span id="p-storage-badge"></span>
-              <span class="spacer"></span>
-              <button id="p-active-btn" class="btn small" data-i18n="btn_set_active">Set active</button>
-              <button id="p-save-into" class="btn small primary" data-i18n="btn_save_into" data-i18n-title="st_save_native_hint">Save to project</button>
-              <button id="p-save" class="btn small" data-i18n="btn_save_as" title="Save the current ComfyUI canvas under a new name/subfolder">Save as…</button>
-              <button id="p-edit" class="btn small" data-i18n="btn_edit">Edit</button>
-              <button id="p-export" class="btn small" data-i18n="btn_export_project">Export</button>
-              <button id="p-delete" class="btn small danger" data-i18n="btn_delete">Delete</button>
-            </div>
-            <p id="p-notes" class="muted" style="margin:6px 0 0"></p>
-            <div class="row toolbar" style="margin-top:10px">
-              <div id="p-crumbs" class="crumbs"></div>
-              <span class="spacer"></span>
-              <button id="p-add-sub" class="btn small ghost" data-i18n="btn_add_sub">+ subfolder</button>
-            </div>
-            <div class="row toolbar" style="margin-top:8px">
-              <input id="p-filter" type="text" class="filter" data-i18n-ph="ph_filter_wf"
-                     placeholder="Search: multiple terms" />
-              <span class="spacer"></span>
-              <span id="p-selinfo" class="muted"></span>
-              <button id="p-export-sel" class="btn small" data-i18n="btn_export_sel">Export selected</button>
-            </div>
-            <div id="p-status" class="status"></div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th class="c-file" data-i18n="th_workflow">Workflow</th>
-                    <th data-i18n="th_subfolder">Subfolder</th>
-                    <th class="c-size" data-i18n="th_size">Size</th>
-                  </tr>
-                </thead>
-                <tbody id="p-body"></tbody>
-              </table>
-            </div>
-            <div class="hint" data-i18n="hint_select">Click to select · Ctrl/⌘-click multi · Shift-click range · double-click to open · right-click for actions</div>
-            <span id="p-summary" class="muted"></span>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="row"><h3 data-i18n="h_exports">Exports</h3><span class="spacer"></span>
-            <button class="btn small export-clear" data-i18n="btn_clear_finished">Clear finished</button></div>
-          <div class="export-jobs" data-jobs="export"></div>
-        </div>
-      </div>
+  <!-- ============ VIEW: LIBRARY ============ -->
+  <section id="view-library" class="view lib active">
+    <div class="lib-tools">
+      <input id="search" type="search" class="grow" data-i18n-ph="ph_search" placeholder="Search workflows…" />
+      <button id="btn-collapse" class="btn icon" data-i18n-title="btn_collapse" aria-label="Collapse all"></button>
+      <button id="btn-refresh" class="btn icon" data-i18n-title="btn_refresh" aria-label="Refresh">⟳</button>
     </div>
+    <div id="tree" class="tree" tabindex="0" role="tree"></div>
+    <div id="selbar" class="selbar hidden">
+      <span id="sel-count" class="grow"></span>
+      <button id="sel-move" class="btn small" data-i18n="ctx_move">Move to…</button>
+      <button id="sel-export" class="btn small" data-i18n="ctx_export">Export</button>
+      <button id="sel-delete" class="btn small danger" data-i18n="ctx_delete">Delete</button>
+      <button id="sel-clear" class="btn small icon" data-i18n-title="btn_clear_selection" aria-label="Clear selection">✕</button>
+    </div>
+    <div id="exports" class="exports"></div>
   </section>
 
   <!-- ============ VIEW: GIT ============ -->
   <section id="view-git" class="view">
-    <div class="panel">
-      <div id="git-banner" class="git-banner"></div>
-      <div class="row toolbar">
-        <label class="field inline">
-          <span data-i18n="lbl_repo_target">Repository</span>
-          <select id="git-repo"></select>
-        </label>
-        <button id="git-refresh" class="btn small" data-i18n="btn_refresh">Refresh</button>
-        <span class="spacer"></span>
-        <div id="git-info" class="kv"></div>
-      </div>
+    <div id="git-banner" class="banner"></div>
+    <div id="git-body">
+      <label class="field">
+        <span data-i18n="lbl_git_project">Project</span>
+        <select id="git-project"></select>
+      </label>
+      <div id="git-info" class="kv-list"></div>
       <div id="git-status" class="status"></div>
-    </div>
 
-    <div id="git-actions-panel" class="panel">
-      <div class="row toolbar">
-        <button id="git-init" class="btn small" data-i18n="btn_git_init">Init repo</button>
-        <span class="spacer"></span>
-        <button id="git-pull" class="btn small" data-i18n="btn_git_pull">Pull</button>
-        <button id="git-push" class="btn small" data-i18n="btn_git_push">Push</button>
+      <div id="git-actions" class="panel">
+        <button id="git-init" class="btn small" data-i18n="btn_git_init">Create repository</button>
+        <div id="git-repo-actions">
+          <div class="row">
+            <input id="git-commit-msg" type="text" class="grow" data-i18n-ph="ph_commit" placeholder="What changed?" />
+            <button id="git-commit" class="btn small primary" data-i18n="btn_git_commit">Commit</button>
+          </div>
+          <div class="row">
+            <button id="git-pull" class="btn small" data-i18n="btn_git_pull">Pull</button>
+            <button id="git-push" class="btn small" data-i18n="btn_git_push">Push</button>
+          </div>
+          <div class="row">
+            <input id="git-remote-url" type="text" class="grow" data-i18n-ph="ph_remote" placeholder="Remote URL (https://… or git@…)" />
+            <button id="git-remote" class="btn small" data-i18n="btn_git_remote">Set remote</button>
+            <button id="git-gh" class="btn small" data-i18n="btn_git_gh">Create on GitHub</button>
+          </div>
+        </div>
       </div>
-      <div class="row toolbar" style="margin-top:10px">
-        <input id="git-commit-msg" type="text" class="filter" style="flex:1"
-               data-i18n-ph="ph_commit" placeholder="Commit message" />
-        <button id="git-commit" class="btn small primary" data-i18n="btn_git_commit">Commit all changes</button>
-      </div>
-      <div class="row toolbar" style="margin-top:10px">
-        <input id="git-remote-url" type="text" class="filter" style="flex:1"
-               data-i18n-ph="ph_remote" placeholder="Remote URL (https://… or git@…)" />
-        <button id="git-remote" class="btn small" data-i18n="btn_git_remote">Set remote</button>
-        <button id="git-gh" class="btn small" data-i18n="btn_git_gh">Create on GitHub</button>
-      </div>
-      <div style="margin-top:12px">
-        <div class="row"><h3 data-i18n="h_changes">Pending changes</h3><span id="git-changes-sum" class="muted"></span></div>
+
+      <div class="panel">
+        <h3><span data-i18n="h_changes">Pending changes</span> <span id="git-changes-sum" class="muted"></span></h3>
         <div id="git-changes" class="changes"></div>
       </div>
-    </div>
-
-    <div class="panel">
-      <div class="row"><h3 data-i18n="h_history">History</h3></div>
-      <div id="git-log" class="changes"></div>
-    </div>
-
-    <div class="panel">
-      <div class="row"><h3 data-i18n="h_git_jobs">Git operations</h3><span class="spacer"></span>
-        <button id="git-clear" class="btn small" data-i18n="btn_clear_finished">Clear finished</button></div>
-      <div id="git-jobs"></div>
+      <div class="panel">
+        <h3 data-i18n="h_history">History</h3>
+        <div id="git-log" class="changes"></div>
+      </div>
+      <div id="git-jobs-panel" class="panel hidden">
+        <h3 class="row"><span class="grow" data-i18n="h_git_jobs">Git operations</span>
+          <button id="git-clear" class="btn small" data-i18n="btn_clear_finished">Clear finished</button></h3>
+        <div id="git-jobs"></div>
+      </div>
     </div>
   </section>
 
   <!-- ============ VIEW: SETTINGS ============ -->
   <section id="view-settings" class="view">
     <div class="panel">
-      <div class="row"><h3 data-i18n="h_root">Workflows root</h3></div>
-      <p class="muted" data-i18n="root_desc">Folder the General view manages. Leave empty to use ComfyUI's own workflows folder (recommended: native open works).</p>
-      <div class="row toolbar" style="margin-top:8px">
-        <input id="s-root" type="text" class="filter" style="flex:1" data-i18n-ph="ph_root" placeholder="(ComfyUI default)" />
-        <button id="s-root-browse" class="btn small" data-i18n="btn_browse">Browse…</button>
-        <button id="s-root-save" class="btn small primary" data-i18n="btn_save">Save</button>
-        <button id="s-root-reset" class="btn small" data-i18n="btn_reset_default">Reset to default</button>
-      </div>
-      <div id="s-root-status" class="status"></div>
+      <h3 data-i18n="h_view_options">View</h3>
+      <label class="field inline"><input id="s-show-linked" type="checkbox" /><span data-i18n="lbl_show_linked">Also list project workflows under "Workflows"</span></label>
     </div>
-
     <div class="panel">
-      <div class="row"><h3 data-i18n="h_db">Projects database</h3></div>
-      <p class="muted" data-i18n="db_desc">A single exportable JSON file. Export it for backup or to share project structure; import to restore or merge.</p>
-      <div class="kv" style="margin:6px 0"><span data-i18n="lbl_db_path">Path:</span><b id="s-db-path"></b></div>
-      <div class="row toolbar">
-        <button id="s-db-export" class="btn small" data-i18n="btn_db_export">Export DB</button>
-        <button id="s-db-import" class="btn small" data-i18n="btn_db_import">Import DB…</button>
-        <label class="field inline"><input id="s-db-merge" type="checkbox" /><span data-i18n="lbl_merge">merge</span></label>
+      <h3 data-i18n="h_storage">Where workflows are saved</h3>
+      <p class="muted" data-i18n="storage_desc">Always in ComfyUI's workflows folder. If the project has its own folder, a copy is kept there too.</p>
+      <div class="kv"><b id="s-root"></b></div>
+    </div>
+    <div class="panel">
+      <h3 data-i18n="h_db">Projects database</h3>
+      <p class="muted" data-i18n="db_desc">A single JSON file. Export it as a backup; import it to restore or merge.</p>
+      <div class="kv"><b id="s-db-path"></b></div>
+      <div class="row">
+        <button id="s-db-export" class="btn small" data-i18n="btn_db_export">Export</button>
+        <button id="s-db-import" class="btn small" data-i18n="btn_db_import">Import…</button>
+        <label class="field inline"><input id="s-db-merge" type="checkbox" /><span data-i18n="lbl_merge">Merge with current</span></label>
       </div>
       <div id="s-db-status" class="status"></div>
     </div>
@@ -236,7 +136,7 @@
     <div class="modal-card help-card">
       <div class="help-head">
         <div id="help-title" class="modal-title"></div>
-        <button id="help-close" class="btn small" aria-label="Close">✕</button>
+        <button id="help-close" class="btn small icon" aria-label="Close" data-i18n-aria="aria_close">✕</button>
       </div>
       <div id="help-body" class="help-body"></div>
     </div>
@@ -244,18 +144,21 @@
 
   <!-- Generic modal dialog -->
   <div id="modal" class="modal hidden">
-    <div class="modal-card">
+    <form id="modal-form" class="modal-card">
       <div id="modal-title" class="modal-title"></div>
       <div id="modal-body" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="modal-cancel" class="btn" data-i18n="btn_cancel">Cancel</button>
-        <button id="modal-ok" class="btn primary" data-i18n="btn_accept">Accept</button>
+        <button id="modal-cancel" type="button" class="btn" data-i18n="btn_cancel">Cancel</button>
+        <button id="modal-ok" type="submit" class="btn primary" data-i18n="btn_accept">Accept</button>
       </div>
-    </div>
+    </form>
   </div>
 
+  <!-- Tip mientras se arrastra -->
+  <div id="drag-tip" class="drag-tip hidden" role="status"></div>
+
   <!-- Hidden file input for imports -->
-  <input id="file-input" type="file" accept=".json" style="display:none" multiple />
+  <input id="file-input" type="file" accept=".json,application/json" style="display:none" multiple />
 
   <script src="app.js"></script>
 </body>
