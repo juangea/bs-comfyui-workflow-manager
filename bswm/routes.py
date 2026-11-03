@@ -423,7 +423,8 @@ def _serve_static(tail):
         return web.Response(status=403, text="forbidden")
     if not os.path.isfile(full):
         return web.Response(status=404, text="not found")
-    return web.FileResponse(full)
+    # ComfyUI solo evita la caché de .js y .css: un HTML viejo con JS nuevo rompería el panel al actualizar.
+    return web.FileResponse(full, headers={"Cache-Control": "no-cache"} if full.endswith(".html") else None)
 
 
 @routes.get(PREFIX)

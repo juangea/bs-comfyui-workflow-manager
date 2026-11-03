@@ -1,6 +1,6 @@
 [project]
 name = "bs-comfyui-workflow-manager"
-version = "1.1.1"
+version = "1.1.2"
 description = "Organize your ComfyUI workflows for production: projects and folders in one tree, saves mirrored to project folders, bulk export and optional Git versioning — all from a built-in panel."
 authors = [
     { name = "Enob-Studio S.L." },
@@ -25,4 +25,4 @@ Repository = "https://github.com/juangea/bs-comfyui-workflow-manager"
 [tool.comfy]
 PublisherId = "bonestudio"
 DisplayName = "Bone-Studio Workflow Manager"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/juangea/bs-comfyui-workflow-manager/main/docs/icon.png"

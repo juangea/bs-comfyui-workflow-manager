@@ -2,8 +2,14 @@
 # (sintaxis tipo .gitignore). El código, webapp/, LICENSE, NOTICE y README sí se publican.
 tests/
 .github/
+docs/
 __pycache__/
 *.pyc
 .gitattributes
+# Temporales
+*.part
+*.tmp
+*.zip
+*.log
 # Seguridad: nunca publicar la bitácora de desarrollo aunque se publique desde el repo de dev.
 HANDOFF.md

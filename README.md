@@ -103,14 +103,14 @@ Apache-2.0 or MIT) in the future.
 
 - **Fonts:** the files under [`webapp/fonts/`](webapp/fonts) (Jost, Hanken Grotesk, IBM Plex Mono) are
   third-party fonts under the **SIL Open Font License 1.1** — see [`webapp/fonts/OFL.txt`](webapp/fonts/OFL.txt).
-- **Brand:** the name **"Bone-Studio"** and the **BS-WM** logo are **trademarks of Enob-Studio S.L.**, all
-  rights reserved, and are **not** covered by the GPL.
+- **Brand:** the name **"Bone-Studio"**, the **BS-WM** logo and the logo in `docs/icon.png` are **trademarks of
+  Enob-Studio S.L.**, all rights reserved, and are **not** covered by the GPL.
 
 **ES —** El código se distribuye bajo la **Licencia Pública General de GNU v3.0** (`GPL-3.0-only`); ver
 [`LICENSE`](LICENSE). Copyright © 2026 **Enob-Studio S.L. y Juan Gea**, que **se reservan el derecho a
 relicenciar** el código bajo otros términos (p. ej. Apache-2.0 o MIT) en el futuro. Las **fuentes**
-(`webapp/fonts/`) son de terceros bajo **SIL OFL 1.1**; la **marca** «Bone-Studio» y el logo **BS-WM** son
-marcas de Enob-Studio S.L. (todos los derechos reservados, fuera de la GPL).
+(`webapp/fonts/`) son de terceros bajo **SIL OFL 1.1**; la **marca** «Bone-Studio», el logo **BS-WM** y el logo
+de `docs/icon.png` son marcas de Enob-Studio S.L. (todos los derechos reservados, fuera de la GPL).
 
 ## Disclaimer / Descargo de responsabilidad
 
